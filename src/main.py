@@ -290,7 +290,7 @@ def _act_opp_kickoff(context: Context, players: list[Player]) -> None:
         return
     gx, gy = own_goal(context)
     guard = min(players, key=lambda p: dist(p.pose.x, p.pose.y, gx, gy))
-    guard.guard(sortie=False)  # 只回守位,不出击;guard 内部细化 p.action
+    guard.guard()
 
     rest = [p for p in players if p is not guard]
     r = context.field.circle_radius

@@ -592,13 +592,8 @@ class Player:
                 _behind_ball(ball.x, ball.y, kick_target, CHASE_BEHIND_M)
             )
 
-    def guard(self, sortie: bool = True) -> None:
-        """守门:无威胁时站小禁区中央待命;有威胁时(``sortie`` 开)出击。
-
-        威胁判据:球当前位置足够靠近己方半场深处(x<-1)才考虑出击。
-        - 有威胁 + ``sortie``→走向球位置(避机器人,不避球——守门要去够球);
-          无威胁→回小禁区中央,朝向球待命。
-        - ``sortie=False``:纯守位,只回小禁区中央,永不出击(防守站位阶段用)。
+    def guard(self) -> None:
+        """守门:站小禁区中央待命
 
         无 pose(未就位)时退回站小禁区中央。
         """
@@ -610,16 +605,6 @@ class Player:
 
         ball = self.context.ball if self.context is not None else None
 
-        # 威胁:球进入己方深处。无球(不可见)→ 视为无威胁,守家。
-        # sortie 关闭时不出击,一律守位。
-        if not sortie or ball is None:
-            self._guard_threatened = False
-        elif self._guard_threatened:
-            self._guard_threatened = ball.x < GUARD_THREAT_EXIT_X
-        else:
-            self._guard_threatened = ball.x < GUARD_THREAT_ENTER_X
-        threatened = self._guard_threatened
-
         # 待命朝向:朝球(便于快速反应);球不可见则朝对方门方向(默认 0)。
         face = 0.0
         if GUARD_FACE_BALL and ball is not None:
@@ -627,33 +612,11 @@ class Player:
                 self.pose.x, self.pose.y, ball.x, ball.y,
             )
 
-        if threatened:
-            # 球位置朝己方门方向退 CHASE_BEHIND_M,守在球与门之间挡射。
-            own_goal_pos = own_goal(self.context)
-            dx = own_goal_pos[0] - ball.x
-            dy = own_goal_pos[1] - ball.y
-            d = math.hypot(dx, dy)
-            if d < 1e-6:
-                target = (ball.x, ball.y)
-            else:
-                target = (
-                    ball.x + dx / d * CHASE_BEHIND_M,
-                    ball.y + dy / d * CHASE_BEHIND_M,
-                )
-            self.action = "guard:intercept"
-            debugdraw.point(
-                target[0], target[1],
-                rgb=(1.0, 0.3, 0.0), scale=0.22, ns="guard_intercept",
-            )
-            self.release_kick()
-            self.walk_to(target, avoid_ball=False, avoid_robots=True)
-        else:
-            # 无威胁:回小禁区中央待命,朝向球。
-            self.action = "guard:home"
-            debugdraw.point(
-                home[0], home[1], rgb=(0.0, 0.6, 1.0), scale=0.2, ns="guard_home",
-            )
-            self.walk_to(home, face=face, avoid_ball=True, avoid_robots=True)
+        self.action = "guard:home"
+        debugdraw.point(
+            home[0], home[1], rgb=(0.0, 0.6, 1.0), scale=0.2, ns="guard_home",
+        )
+        self.walk_to(home, face=face, avoid_ball=True, avoid_robots=True)
 
     def support(self) -> None:
         """支援:站在 球→己方门中心 连线上距球 ``SUPPORT_DIST_M`` 处补防。
