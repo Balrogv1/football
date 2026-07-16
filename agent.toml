@@ -1,6 +1,6 @@
-id = "com.example.lqinternalmatch"
+id = "com.example.match"
 version = "1.1.0"
-name = { en = "lqInternalMatch", zh = "lqInternalMatch" }
+name = { en = "Match", zh = "Match" }
 logo = "/res/logo.png"
 description = "3v3 SoccerSim Agent written in Python"
 entry = "src/main.py:SoccerSimAgent"
