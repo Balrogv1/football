@@ -1,16 +1,18 @@
-"""ROS 真值数据源:订阅仿真真值 + 裁判机,提供 WorldSnapshot。
+"""ROS ground-truth source providing WorldSnapshot from simulation topics.
 
-【平台层,Docker-only】依赖 rclpy / geometry_msgs / std_msgs,只在装有 ROS 的运行
-环境导入。逻辑层(runtime / player / types)不 import 本模块,靠 runtime 的
-ContextSource 注入解耦——因此 runtime 仍可在开发机无 ROS 单测。
+This Docker-only platform layer depends on rclpy, geometry_msgs, and std_msgs
+and is imported only in a ROS environment. The runtime, player, and types logic
+does not import it directly; ContextSource injection keeps runtime testable on
+development machines without ROS.
 
-订阅(队伍视角坐标,坐标翻转由仿真器侧完成,这里透传):
-- 队友 pose:  /team{id}/{robot_name}/soccer/sim/ground_truth/robot_pose
-- 对手 pose:  同上,用 opponent_robot_names
-- 球:        /team{id}/soccer/sim/ground_truth/ball
-- 裁判机:    game_controller_topic(std_msgs/String JSON)
+Subscriptions use team-relative coordinates transformed by the simulator:
+- teammate pose: /team{id}/{robot_name}/soccer/sim/ground_truth/robot_pose
+- opponent pose: the same pattern using opponent_robot_names
+- ball: /team{id}/soccer/sim/ground_truth/ball
+- GameController: game_controller_topic as std_msgs/String JSON
 
-节点 + SingleThreadedExecutor + spin 线程的生命周期从旧 SoccerRosAdapter 移植而来。
+The node, SingleThreadedExecutor, and spin-thread lifecycle were ported from the
+legacy SoccerRosAdapter.
 """
 
 from __future__ import annotations
@@ -43,11 +45,11 @@ _log = logging.getLogger(__name__)
 
 
 class RosContextSource:
-    """拥有 ROS 节点/订阅/executor,把最新真值汇成 WorldSnapshot。
+    """Own ROS subscriptions and aggregate current ground truth into snapshots.
 
-    实现 runtime 的 ContextSource 协议:``start`` / ``stop`` / ``get_snapshot``。
-    所有存储对象是 frozen dataclass(不可变),``get_snapshot`` 只需浅拷贝字典,
-    无需深拷贝。
+    This implements runtime's ContextSource protocol: ``start``, ``stop``, and
+    ``get_snapshot``. All stored objects are immutable frozen dataclasses, so
+    ``get_snapshot`` only needs shallow dictionary copies.
     """
 
     def __init__(self, config: SoccerConfig) -> None:
@@ -65,7 +67,7 @@ class RosContextSource:
         self._ball: BallState | None = None
         self._game: GameControlState | None = None
 
-        # ROS 节点/执行器生命周期
+        # ROS node and executor lifecycle.
         self._owns_context = False
         self._ros_context: Any = None
         self._node: Any = None
@@ -74,7 +76,7 @@ class RosContextSource:
         self._started = False
 
     # ------------------------------------------------------------------
-    # ContextSource 协议
+    # ContextSource protocol
     # ------------------------------------------------------------------
 
     def start(self) -> None:
@@ -84,7 +86,7 @@ class RosContextSource:
         self._node = self._create_node()
         self._create_subscriptions()
         self._start_spin()
-        # 复用本 node 发布调试可视化 MarkerArray + Python log(Docker-only)
+        # Reuse this node for Docker-only debug markers and Python logs.
         from . import debugdraw
         from . import log_publisher
         debugdraw.install(self._node)
@@ -111,7 +113,7 @@ class RosContextSource:
             )
 
     # ------------------------------------------------------------------
-    # 订阅
+    # Subscriptions
     # ------------------------------------------------------------------
 
     def _create_subscriptions(self) -> None:
@@ -178,14 +180,14 @@ class RosContextSource:
         except ValueError as exc:
             _log.warning("ignore invalid GameController payload: %s", exc)
             return
-        # frozen dataclass:通过 replace 打上 last_seen_at
+        # Use replace to stamp last_seen_at on the frozen dataclass.
         import dataclasses
         game = dataclasses.replace(game, last_seen_at=time.monotonic())
         with self._lock:
             self._game = game
 
     # ------------------------------------------------------------------
-    # topic 名
+    # Topic names
     # ------------------------------------------------------------------
 
     def _robot_topic(self, robot_name: str, suffix: str) -> str:
@@ -210,7 +212,7 @@ class RosContextSource:
         )
 
     # ------------------------------------------------------------------
-    # 节点 / executor 生命周期(移植自旧 SoccerRosAdapter)
+    # Node and executor lifecycle, ported from the legacy SoccerRosAdapter
     # ------------------------------------------------------------------
 
     def _create_node(self) -> Any:

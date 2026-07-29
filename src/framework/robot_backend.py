@@ -1,16 +1,20 @@
-"""BoosterRobot SDK 包装:每个 player 一个 backend handle。
+"""BoosterRobot SDK wrapper providing one backend handle per player.
 
-【平台层,Docker-only】依赖 boosteros.robots.booster,只在装有 SDK 的运行环境
-导入。Player 通过 ``_backend`` 调底盘/踢球/慢操作,但 Player 本身(player.py)不
-import 本模块——runtime 构造时由 agent 注入,保持 player.py 平台无关。
+This Docker-only platform layer depends on boosteros.robots.booster and is
+imported only where the SDK is installed. Player uses ``_backend`` for chassis,
+kicking, and slow operations but does not import this module. The agent injects
+it during runtime construction, keeping player.py platform-independent.
 
-SDK 方法名对齐旧代码经过验证的调用。
+SDK method names match calls verified in the legacy implementation.
 
-慢操作(request_mode / get_up)是秒级同步 SDK 调用,放到每 backend 一个 worker
-线程执行,主循环非阻塞。意图队列长度 1(覆盖式):连续请求只保留最后一个。
+Slow operations such as ``request_mode`` and ``get_up`` are synchronous SDK
+calls that can take seconds. Each backend runs them on a worker thread so the
+main loop remains nonblocking. A single overwrite slot retains only the latest
+request.
 
-mode 由用户经 request_mode 管理(见 docs/new_design.md §5);set_velocity / kick
-只在 ``_mode == "walk"`` 时下发,否则跳过——避免非 walk 模式下 SDK 返回 400 刷屏。
+Users manage mode through request_mode; see section 5 of docs/new_design.md.
+Velocity and kick commands are sent only when ``_mode == "walk"`` to avoid
+repeated SDK 400 errors in other modes.
 """
 
 from __future__ import annotations
@@ -32,9 +36,10 @@ _GET_UP_THROTTLE_SEC = 1.0
 
 
 class RobotBackend:
-    """单个球员的 SDK 包装 + 慢操作 worker 线程。
+    """SDK wrapper and slow-operation worker for one player.
 
-    生命周期:mixin 创建并注入到 Player,runtime stop 时统一 close(会停 worker)。
+    The mixin creates and injects it into Player. Runtime closes it, including
+    the worker, during shutdown.
     """
 
     def __init__(self, player_id: int, robot_name: str) -> None:
@@ -46,12 +51,12 @@ class RobotBackend:
             timeout=10.0,
         )
         self._kick_manager = SoccerKickManager(self._robot)
-        self._mode: str | None = None   # 已确认的 SDK mode(worker 更新)
+        self._mode: str | None = None   # Confirmed SDK mode, updated by worker
         self._fall_down_state: str | None = None
         self._fall_down_recoverable: bool = False
         self._kicking = False
 
-        # 慢操作 worker:长度 1 覆盖式意图槽 + 唤醒事件
+        # Slow-operation worker with one overwrite slot and a wake event.
         self._pending: tuple[str, object] | None = None
         self._slot_lock = threading.Lock()
         self._wake = threading.Event()
@@ -70,7 +75,7 @@ class RobotBackend:
         )
 
     def close(self) -> None:
-        """释放 SDK 资源:停 worker、停踢球、停车、关闭连接。"""
+        """Release SDK resources by stopping work, motion, and the connection."""
         self._worker_stop.set()
         self._wake.set()
         if self._worker.is_alive():
@@ -92,12 +97,12 @@ class RobotBackend:
 
     @property
     def mode(self) -> str | None:
-        """当前已确认的 SDK mode;worker 完成切换后更新。"""
+        """Return the confirmed SDK mode, updated after the worker switches it."""
         return self._mode
 
     @property
     def fall_down_state(self) -> str | None:
-        """当前 SDK 跌倒状态;None 表示未知。"""
+        """Return the SDK fall state, or None when unknown."""
         return self._fall_down_state
 
     @property
@@ -105,11 +110,11 @@ class RobotBackend:
         return self._fall_down_recoverable
 
     # ------------------------------------------------------------------
-    # 底盘控制(步骤 1)
+    # Chassis control (step 1)
     # ------------------------------------------------------------------
 
     def set_velocity(self, vx: float, vy: float, vyaw: float) -> None:
-        """底盘速度。踢球时跳过(踢球独占底盘);非 walk 模式跳过(需先 request_mode)。"""
+        """Set chassis velocity unless kicking or outside walk mode."""
         if self._kicking:
             return
         if self._mode != "walk":
@@ -127,13 +132,13 @@ class RobotBackend:
             )
 
     # ------------------------------------------------------------------
-    # 踢球(步骤 2)—— 入参为体坐标系
+    # Kicking (step 2); inputs use body coordinates
     # ------------------------------------------------------------------
 
     def kick(
         self, direction: float, power: float, ball_x: float, ball_y: float,
     ) -> None:
-        """启动或更新踢球(体坐标系)。非 walk 模式跳过(需先 request_mode)。"""
+        """Start or update a body-frame kick while in walk mode."""
         if self._mode != "walk":
             _log.debug(
                 "player %d kick skipped: mode=%s (call request_mode first)",
@@ -152,7 +157,7 @@ class RobotBackend:
             self._kicking = False
 
     def release_kick(self) -> None:
-        """结束踢球,底盘重新接受 set_velocity。"""
+        """End the kick so the chassis accepts set_velocity again."""
         if not self._kicking:
             return
         try:
@@ -164,17 +169,17 @@ class RobotBackend:
             self._kicking = False
 
     # ------------------------------------------------------------------
-    # 慢操作(步骤 3)—— 非阻塞,由 worker 线程执行
+    # Slow operations (step 3), executed nonblockingly by the worker
     # ------------------------------------------------------------------
 
     def request_mode(self, mode: str) -> None:
-        """异步请求切换 SDK mode。已在目标模式则短路。"""
+        """Request an asynchronous SDK mode switch unless already in that mode."""
         if self._mode == mode:
             return
         self._enqueue(("mode", mode))
 
     def get_up(self) -> None:
-        """异步触发起身。~1s 节流,每帧无脑调安全。"""
+        """Request get-up asynchronously, throttled to about once per second."""
         now = time.monotonic()
         if now - self._last_get_up_at < _GET_UP_THROTTLE_SEC:
             return
@@ -183,7 +188,7 @@ class RobotBackend:
 
     def _enqueue(self, intent: tuple[str, object]) -> None:
         with self._slot_lock:
-            self._pending = intent   # 覆盖式:只保留最后一个
+            self._pending = intent   # Keep only the most recent intent.
         self._wake.set()
 
     def _worker_loop(self) -> None:
@@ -192,9 +197,9 @@ class RobotBackend:
             if self._worker_stop.is_set():
                 break
             self._wake.clear()
-            # 轮询真实 SDK 模式,保持 _mode 反映现实(而非乐观缓存)。
-            # 比赛重启后仿真会把机器人重置出 walk 模式;轮询让 _mode 跟着变,
-            # 上层 ensure_ready 看到 p.mode != "walk" 会自动重新 request_mode 自愈。
+            # Poll the actual SDK mode so _mode reflects reality. A simulation
+            # restart can reset the robot out of walk mode; polling lets
+            # ensure_ready detect that and request walk mode again.
             self._poll_mode()
             self._poll_fall_down_state()
             with self._slot_lock:
@@ -241,7 +246,7 @@ class RobotBackend:
         try:
             self._robot.set_gait("soccer")
             self._robot.set_mode(mode)
-            self._mode = mode   # 乐观即时反馈;下次 _poll_mode 会用实际值校正
+            self._mode = mode   # Optimistic update; the next poll corrects it.
             _log.info("player %d entered %s mode", self._player_id, mode)
         except Exception as exc:
             _log.warning("player %d set_mode(%s) failed: %s", self._player_id, mode, exc)
@@ -249,7 +254,7 @@ class RobotBackend:
     def _exec_get_up(self) -> None:
         try:
             self._robot.get_up()
-            self._mode = None   # 起身后 mode 未知,需重新 request_mode
+            self._mode = None   # Mode is unknown after getting up; request it again.
             self._fall_down_state = None
             self._fall_down_recoverable = False
             _log.info("player %d get_up done", self._player_id)
