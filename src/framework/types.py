@@ -121,6 +121,8 @@ class FieldDimensions:
     penalty_area_width: float
     goal_area_length: float
     goal_area_width: float
+    goal_height: float = 1.8
+    goal_depth: float = 0.6
 
 
 ADULT_FIELD_DIMENSIONS = FieldDimensions(
@@ -239,10 +241,12 @@ class WorldSnapshot:
     A data source such as ROS ground truth only supplies the latest observations
     and their ``last_seen_at`` values. Runtime applies freshness filtering and
     replaces stale data with None when building Context. See section 9.3 of
-    docs/new_design.md.
+    docs/new_design.md. Field geometry is retained until explicitly updated;
+    None means no valid field info has been received yet.
     """
 
     game: GameControlState | None = None
     ball: BallState | None = None
     teammates: dict[int, RobotState] = field(default_factory=dict)
     opponents: dict[int, RobotState] = field(default_factory=dict)
+    field: FieldDimensions | None = None

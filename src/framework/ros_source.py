@@ -10,6 +10,7 @@ Subscriptions use team-relative coordinates transformed by the simulator:
 - opponent pose: the same pattern using opponent_robot_names
 - ball: /team{id}/soccer/sim/ground_truth/ball
 - GameController: game_controller_topic as std_msgs/String JSON
+- field dimensions: /soccer/field_info as retained std_msgs/String JSON
 
 The node, SingleThreadedExecutor, and spin-thread lifecycle were ported from the
 legacy SoccerRosAdapter.
@@ -34,8 +35,11 @@ from rclpy.qos import (
 from std_msgs.msg import String as RosString
 
 from .config import SoccerConfig
+from .field_codec import field_dimensions_from_json
 from .game_codec import game_control_state_from_json
-from .types import BallState, GameControlState, Pose2D, RobotState, WorldSnapshot
+from .types import (
+    BallState, FieldDimensions, GameControlState, Pose2D, RobotState, WorldSnapshot,
+)
 
 
 __all__ = ["RosContextSource"]
@@ -66,6 +70,7 @@ class RosContextSource:
         }
         self._ball: BallState | None = None
         self._game: GameControlState | None = None
+        self._field: FieldDimensions | None = None
 
         # ROS node and executor lifecycle.
         self._owns_context = False
@@ -85,12 +90,12 @@ class RosContextSource:
         self._started = True
         self._node = self._create_node()
         self._create_subscriptions()
-        self._start_spin()
         # Reuse this node for Docker-only debug markers and Python logs.
         from . import debugdraw
         from . import log_publisher
         debugdraw.install(self._node)
         log_publisher.install(self._node)
+        self._start_spin()
         _log.info(
             "RosContextSource started: team_id=%d gc_topic=%s",
             self._config.team_id, self._config.game_controller_topic,
@@ -110,6 +115,7 @@ class RosContextSource:
                 ball=self._ball,
                 teammates=dict(self._teammates),
                 opponents=dict(self._opponents),
+                field=self._field,
             )
 
     # ------------------------------------------------------------------
@@ -117,6 +123,19 @@ class RosContextSource:
     # ------------------------------------------------------------------
 
     def _create_subscriptions(self) -> None:
+        self._subscriptions.append(
+            self._node.create_subscription(
+                RosString,
+                "/soccer/field_info",
+                self._field_cb,
+                QoSProfile(
+                    history=QoSHistoryPolicy.KEEP_LAST,
+                    depth=1,
+                    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+                    reliability=QoSReliabilityPolicy.RELIABLE,
+                ),
+            )
+        )
         truth_qos = self._qos(depth=1)
         for pid, name in enumerate(self._config.robot_names, start=1):
             self._subscriptions.append(
@@ -152,6 +171,16 @@ class RosContextSource:
                 self._qos(depth=10),
             )
         )
+
+    def _field_cb(self, msg: Any) -> None:
+        try:
+            dimensions = field_dimensions_from_json(str(msg.data))
+        except ValueError as exc:
+            _log.warning("ignore invalid field info payload: %s", exc)
+            return
+        with self._lock:
+            self._field = dimensions
+        _log.info("field info received from /soccer/field_info: %s", dimensions)
 
     def _make_pose_cb(self, store: dict[int, RobotState], player_id: int):
         def callback(msg: Any) -> None:

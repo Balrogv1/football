@@ -222,9 +222,9 @@ class SoccerRuntime:
             for a in [i * math.pi / 12 for i in range(25)]
         ]
         debugdraw.line(circle, rgb=gray, ns="field_circle")
-        # Goal frames with half-goal width and 0.6 m depth.
+        # Goal frames using the published dimensions.
         gw = f.goal_width / 2.0
-        depth = 0.6
+        depth = f.goal_depth
         for sx in (-1.0, 1.0):
             fx = sx * hl
             bx = sx * (hl + depth)
@@ -258,7 +258,10 @@ class SoccerRuntime:
             now=now,
             dt=dt,
             team_id=self._config.team_id,
-            field=ADULT_FIELD_DIMENSIONS,
+            # Older simulators do not publish field info. Also covers startup
+            # before the retained message arrives; valid topic data takes over
+            # on the next frame without blocking strategy execution.
+            field=snap.field if snap.field is not None else ADULT_FIELD_DIMENSIONS,
             game=self._fresh_game(snap.game, now),
             ball=self._fresh_ball(snap.ball, now),
             teammates={
