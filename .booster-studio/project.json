@@ -1,1 +1,8 @@
-{"version":1,"sceneId":"football3v3","projectMode":"soccer-match","updatedAt":1781763739137}
+{
+    "version": 2,
+    "scene": {
+        "mode": "pinned",
+        "id": "football3v3"
+    },
+    "projectMode": "soccer-match"
+}
