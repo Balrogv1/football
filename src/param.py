@@ -78,6 +78,10 @@ CENTER_LEAVE_DIST_M = 0.15 # Distance from center at which the ball counts as mo
 
 OPP_SET_WALL_DIST_M = 2.0 # Blocking distance during an opponent kickoff
 
+# Opponent set plays: retreat threshold and field boundary margin (m).
+OPP_SET_PLAY_CLEARANCE_M = 1.5
+OPP_SET_PLAY_FIELD_MARGIN_M = 0.3
+
 
 # ======================================================================
 # Positioning and avoidance
