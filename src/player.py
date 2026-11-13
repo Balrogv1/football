@@ -38,6 +38,7 @@ from .utils.path_planner import plan_global_path
 
 if TYPE_CHECKING:
     from .framework.config import SoccerConfig
+    from .framework.robot_backend import RobotBackend
 
 
 __all__ = ["Player"]
@@ -95,7 +96,7 @@ class Player:
         self,
         player_id: int,
         config: "SoccerConfig",
-        _backend: object | None,
+        _backend: "RobotBackend | None",
     ) -> None:
         self.id: int = player_id
         self.config: "SoccerConfig" = config
@@ -163,9 +164,10 @@ class Player:
     @property
     def penalty(self) -> Penalty:
         ctx = self.context
-        if ctx is None or ctx.game is None:
+        game = ctx.game if ctx is not None else None
+        if game is None:
             return Penalty.NONE
-        state = ctx.game.get_player_state(self.config.team_id, self.id)
+        state = game.get_player_state(self.config.team_id, self.id)
         return Penalty.NONE if state is None else state.penalty
 
     @property
@@ -203,7 +205,8 @@ class Player:
             _log.warning("player %d kick skipped: pose unknown", self.id)
             return
 
-        ball = self.context.ball if self.context is not None else None
+        ctx = self.context
+        ball = ctx.ball if ctx is not None else None
         if ball is None:
             _log.warning("player %d kick skipped: ball unknown", self.id)
             return
@@ -366,10 +369,11 @@ class Player:
 
     def face_to(self, target_theta: float) -> None:
         """Turn in place to the target heading."""
-        if self.pose is None:
+        pose = self.pose
+        if pose is None:
             self.stop()
             return
-        err = normalize_angle(target_theta - self.pose.theta)
+        err = normalize_angle(target_theta - pose.theta)
         self.set_velocity(0.0, 0.0, self._angular(err))
 
     def walk_to(
@@ -420,15 +424,16 @@ class Player:
         goal_dir = math.atan2(dy, dx)
         planned_path: list[tuple[float, float]] | None = None
         waypoint: tuple[float, float] | None = None
-        if (avoid_ball or avoid_robots) and self.context is not None:
+        ctx = self.context
+        if (avoid_ball or avoid_robots) and ctx is not None:
             obstacles = collect_obstacles(
-                self.context, self.id,
+                ctx, self.id,
                 ball=avoid_ball, robots=avoid_robots,
                 goals=(avoid_ball or avoid_robots),
             )
             if USE_GLOBAL_PATH_PLANNER:
                 planned_path = plan_global_path(
-                    self.context,
+                    ctx,
                     (pose.x, pose.y),
                     (tx, ty),
                     obstacles,
@@ -560,10 +565,11 @@ class Player:
         opponent = ctx.opponents.get(opponent_id) if ctx is not None else None
         if ctx is None or pose is None or ball is None or opponent is None:
             return None
-        if opponent.pose is None:
+        opponent_pose = opponent.pose
+        if opponent_pose is None:
             return None
 
-        ax, ay = opponent.pose.x, opponent.pose.y
+        ax, ay = opponent_pose.x, opponent_pose.y
         bx, by = ball.x, ball.y
         vx, vy = bx - ax, by - ay
         length2 = vx * vx + vy * vy
@@ -585,14 +591,16 @@ class Player:
         ``CHASE_BEHIND_M`` behind the ball on the ball-to-goal line, naturally
         aligning the player for a shot on arrival.
         """
-        ball = self.context.ball if self.context is not None else None
-        if ball is None or self.pose is None:
+        ctx = self.context
+        pose = self.pose
+        ball = ctx.ball if ctx is not None else None
+        if ctx is None or ball is None or pose is None:
             self.stop()
             return
         if kick_target is None:
-            kick_target = opponent_goal(self.context)
+            kick_target = opponent_goal(ctx)
 
-        d = dist(self.pose.x, self.pose.y, ball.x, ball.y)
+        d = dist(pose.x, pose.y, ball.x, ball.y)
         self._kicking = d <= (KICK_EXIT_M if self._kicking else KICK_ENTER_M)
         if self._kicking:
             kick_plan = self.plan_kick()
@@ -612,19 +620,21 @@ class Player:
 
         Fall back to that position when no active threat is available.
         """
-        home = own_goal_area_center(self.context) if self.context is not None else None
-        if home is None or self.pose is None:
+        ctx = self.context
+        pose = self.pose
+        home = own_goal_area_center(ctx) if ctx is not None else None
+        if home is None or pose is None:
             self.action = "guard:stop"
             self.stop()
             return
 
-        ball = self.context.ball if self.context is not None else None
+        ball = ctx.ball if ctx is not None else None
 
         # Face the ball for faster reactions, or the opponent's goal if unseen.
         face = 0.0
         if GUARD_FACE_BALL and ball is not None:
             face = angle_to(
-                self.pose.x, self.pose.y, ball.x, ball.y,
+                pose.x, pose.y, ball.x, ball.y,
             )
 
         self.action = "guard:home"
@@ -639,11 +649,11 @@ class Player:
         This places the player on a blocking line between the ball and our goal.
         """
         ctx = self.context
-        if ctx is None:
+        ball = ctx.ball if ctx is not None else None
+        if ctx is None or ball is None:
             self.stop()
             return
 
-        ball = self.context.ball
         gx, gy = own_goal(ctx)
         bx, by = (ball.x, ball.y)
         dx, dy = gx - bx, gy - by
@@ -665,15 +675,17 @@ class Player:
 
     def take_kickoff(self, kick_target: tuple[float, float] | None = None) -> None:
         """Stage behind the ball for our restart, then approach and kick."""
-        ball = self.context.ball if self.context is not None else None
-        if ball is None or self.pose is None:
+        ctx = self.context
+        pose = self.pose
+        ball = ctx.ball if ctx is not None else None
+        if ctx is None or ball is None or pose is None:
             self.stop()
             return
         if kick_target is None:
-            kick_target = opponent_goal(self.context)
+            kick_target = opponent_goal(ctx)
         kick_dir = angle_to(ball.x, ball.y, *kick_target)
         cos_k, sin_k = math.cos(kick_dir), math.sin(kick_dir)
-        rel_x, rel_y = self.pose.x - ball.x, self.pose.y - ball.y
+        rel_x, rel_y = pose.x - ball.x, pose.y - ball.y
         behind = rel_x * cos_k + rel_y * sin_k          # Negative is our side.
         lateral = abs(-rel_x * sin_k + rel_y * cos_k)
         if behind > KICKOFF_FRONT_MARGIN or lateral > KICKOFF_LATERAL_TOL:
@@ -692,9 +704,11 @@ class Player:
             self.stop()
             return
         face = None
-        ball = self.context.ball if self.context is not None else None
-        if ball is not None and self.pose is not None:
-            face = angle_to(self.pose.x, self.pose.y, ball.x, ball.y)
+        ctx = self.context
+        pose = self.pose
+        ball = ctx.ball if ctx is not None else None
+        if ball is not None and pose is not None:
+            face = angle_to(pose.x, pose.y, ball.x, ball.y)
         self.release_kick()
         self.walk_to(target, face=face, avoid_ball=True, avoid_robots=True)
 

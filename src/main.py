@@ -197,11 +197,19 @@ def _clear_normal_sticky(store) -> None:
     store.normal_attacker = None
 
 
+def _player_dist_to_position(p: Player, target: tuple[float, float]) -> float:
+    """Return infinity when the player's position is unknown."""
+    pose = p.pose
+    if pose is None:
+        return math.inf
+    return dist(pose.x, pose.y, *target)
+
+
 def _player_dist_to_ball(context: Context, p: Player) -> float:
     """Return a player's distance to the ball's current position."""
     ball = context.ball
     return (
-        dist(p.pose.x, p.pose.y, ball.x, ball.y) + _fallen_time_cost(p)
+        _player_dist_to_position(p, (ball.x, ball.y)) + _fallen_time_cost(p)
         if ball is not None else math.inf
     )
 
@@ -251,7 +259,7 @@ def _act_normal(context: Context, players: list[Player], store) -> None:
     rest = [p for p in players if p is not attacker]
     if rest:
         gx, gy = own_goal(context)
-        guard = min(rest, key=lambda p: dist(p.pose.x, p.pose.y, gx, gy))
+        guard = min(rest, key=lambda p: _player_dist_to_position(p, (gx, gy)))
         guard.guard()  
         rest = [p for p in rest if p is not guard]
 
@@ -282,7 +290,7 @@ def _act_our_kickoff(context: Context, players: list[Player], store) -> None:
     rest = [p for p in players if p is not attacker]
     if rest:
         gx, gy = own_goal(context)
-        guard = min(rest, key=lambda p: dist(p.pose.x, p.pose.y, gx, gy))
+        guard = min(rest, key=lambda p: _player_dist_to_position(p, (gx, gy)))
         guard.guard()
         rest = [p for p in rest if p is not guard]
 
@@ -296,7 +304,7 @@ def _act_opp_kickoff(context: Context, players: list[Player]) -> None:
     if not players:
         return
     gx, gy = own_goal(context)
-    guard = min(players, key=lambda p: dist(p.pose.x, p.pose.y, gx, gy))
+    guard = min(players, key=lambda p: _player_dist_to_position(p, (gx, gy)))
     guard.guard()
 
     rest = [p for p in players if p is not guard]
@@ -364,7 +372,8 @@ def _act_opp_set_play(context: Context, players: list[Player], store) -> None:
             p.stop()
             continue
 
-        target = min(candidates, key=lambda t: dist(pose.x, pose.y, *t))
+        px, py = pose.x, pose.y
+        target = min(candidates, key=lambda t: dist(px, py, *t))
         # Short omnidirectional steps follow the retreat line directly.
         # Do not invoke path avoidance: the movement is away from the ball.
         length = dist(pose.x, pose.y, *target)
@@ -457,16 +466,17 @@ def _draw_teammate_marker(p: Player) -> None:
     """
     from .framework import debugdraw
 
-    if p.pose is None:
+    pose = p.pose
+    if pose is None:
         return
     red = (1.0, 0.2, 0.2)
     if p.is_kicking:
-        debugdraw.cube(p.pose.x, p.pose.y, rgb=red, scale=0.38, ns="teammate")
+        debugdraw.cube(pose.x, pose.y, rgb=red, scale=0.38, ns="teammate")
     else:
-        debugdraw.point(p.pose.x, p.pose.y, rgb=red, scale=0.3, ns="teammate")
+        debugdraw.point(pose.x, pose.y, rgb=red, scale=0.3, ns="teammate")
     kick_tag = " [KICK]" if p.is_kicking else ""
     label = f"{p.id}:{p.action}{kick_tag}"
-    debugdraw.text(p.pose.x, p.pose.y, label, rgb=(1.0, 0.9, 0.6), ns="teammate_id")
+    debugdraw.text(pose.x, pose.y, label, rgb=(1.0, 0.9, 0.6), ns="teammate_id")
 
 
 def _analyze_and_draw(context: Context, players: list[Player], store) -> None:
@@ -488,18 +498,20 @@ def _analyze_and_draw(context: Context, players: list[Player], store) -> None:
 
     # 2. Draw distance labels: red for teammates and blue for opponents.
     for p in players:
-        if p.pose is None:
+        pose = p.pose
+        if pose is None:
             continue
-        d = dist(p.pose.x, p.pose.y, ball.x, ball.y)
+        d = dist(pose.x, pose.y, ball.x, ball.y)
         debugdraw.text(
-            p.pose.x + 0.3, p.pose.y - 0.3, f"{d:.1f}m",
+            pose.x + 0.3, pose.y - 0.3, f"{d:.1f}m",
             rgb=(1.0, 0.6, 0.6), ns="dist_ours",
         )
     for r in context.opponents.values():
-        if r.pose is None:
+        pose = r.pose
+        if pose is None:
             continue
-        d = dist(r.pose.x, r.pose.y, ball.x, ball.y)
+        d = dist(pose.x, pose.y, ball.x, ball.y)
         debugdraw.text(
-            r.pose.x + 0.3, r.pose.y - 0.3, f"{d:.1f}m",
+            pose.x + 0.3, pose.y - 0.3, f"{d:.1f}m",
             rgb=(0.6, 0.6, 1.0), ns="dist_opp",
         )
