@@ -7,10 +7,10 @@ it during runtime construction, keeping player.py platform-independent.
 
 SDK method names match calls verified in the legacy implementation.
 
-Slow operations such as ``request_mode`` and ``get_up`` are synchronous SDK
-calls that can take seconds. Each backend runs them on a worker thread so the
-main loop remains nonblocking. A single overwrite slot retains only the latest
-request.
+Slow operations run on a worker thread so the main loop remains nonblocking.
+The SDK's ``get_up`` returns a TaskHandle; the worker waits for its terminal
+status before accepting another slow operation. Otherwise, a single overwrite
+slot retains only the latest request.
 
 Users manage mode through request_mode; see section 5 of docs/new_design.md.
 Velocity and kick commands are sent only when ``_mode == "walk"`` to avoid
@@ -62,6 +62,7 @@ class RobotBackend:
         self._wake = threading.Event()
         self._worker_stop = threading.Event()
         self._last_get_up_at = 0.0
+        self._getting_up = False  # Includes queued, starting, and running tasks.
         self._worker = threading.Thread(
             target=self._worker_loop,
             name=f"backend_worker_{player_id}",
@@ -108,6 +109,12 @@ class RobotBackend:
     @property
     def fall_down_recoverable(self) -> bool:
         return self._fall_down_recoverable
+
+    @property
+    def is_getting_up(self) -> bool:
+        """Return whether get-up is queued or its SDK task is still active."""
+        with self._slot_lock:
+            return self._getting_up
 
     # ------------------------------------------------------------------
     # Chassis control (step 1)
@@ -188,6 +195,12 @@ class RobotBackend:
 
     def _enqueue(self, intent: tuple[str, object]) -> None:
         with self._slot_lock:
+            # Do not overwrite a queued get-up or switch modes while its SDK
+            # task is running, even if the fall/mode snapshot already changed.
+            if self._getting_up:
+                return
+            if intent[0] == "get_up":
+                self._getting_up = True
             self._pending = intent   # Keep only the most recent intent.
         self._wake.set()
 
@@ -213,34 +226,37 @@ class RobotBackend:
             elif kind == "get_up":
                 self._exec_get_up()
 
-    def _poll_mode(self) -> None:
+    def _poll_mode(self) -> bool:
         try:
             mode = self._robot.get_mode()
         except Exception as exc:
             _log.debug("player %d get_mode failed: %s", self._player_id, exc)
-            return
+            return False
         if isinstance(mode, str):
             self._mode = mode
             if mode == "walk":
                 self._fall_down_state = "normal"
                 self._fall_down_recoverable = False
+            return True
+        return False
 
-    def _poll_fall_down_state(self) -> None:
+    def _poll_fall_down_state(self) -> bool:
         if self._mode == "walk":
-            return
+            return True
         try:
             fall_down_state = self._robot.get_fall_down_state()
         except Exception as exc:
             _log.debug(
                 "player %d get_fall_down_state failed: %s", self._player_id, exc,
             )
-            return
+            return False
         state_value = getattr(fall_down_state, "state", None)
         recoverable_value = getattr(fall_down_state, "recoverable", False)
         self._fall_down_state = state_value if isinstance(state_value, str) else None
         self._fall_down_recoverable = (
             recoverable_value if isinstance(recoverable_value, bool) else False
         )
+        return isinstance(state_value, str)
 
     def _exec_set_mode(self, mode: str) -> None:
         try:
@@ -253,10 +269,29 @@ class RobotBackend:
 
     def _exec_get_up(self) -> None:
         try:
-            self._robot.get_up()
+            # A queued request may outlive the fall. Recheck immediately before
+            # issuing get_up, and never act on a failed refresh's cached state.
+            if not self._poll_mode() or not self._poll_fall_down_state():
+                return
+            if self._fall_down_state in (None, "normal", "unknown", "getting_up"):
+                return
+            task = self._robot.get_up()
+            while not task.done():
+                if self._worker_stop.is_set():
+                    return  # Get-up tasks cannot be cancelled.
+                task.wait(timeout=0.5)
+            if task.status != "SUCCEEDED":
+                _log.warning(
+                    "player %d get_up ended: status=%s error=%s",
+                    self._player_id, task.status, task.error,
+                )
+                return
             self._mode = None   # Mode is unknown after getting up; request it again.
             self._fall_down_state = None
             self._fall_down_recoverable = False
             _log.info("player %d get_up done", self._player_id)
         except Exception as exc:
             _log.warning("player %d get_up failed: %s", self._player_id, exc)
+        finally:
+            with self._slot_lock:
+                self._getting_up = False

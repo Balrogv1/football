@@ -338,6 +338,11 @@ class Player:
     # Slow operations, invoked asynchronously to avoid blocking
     # ------------------------------------------------------------------
 
+    @property
+    def is_getting_up(self) -> bool:
+        """Return whether recovery is queued or still executing in the SDK."""
+        return self._backend is not None and self._backend.is_getting_up
+
     def request_mode(self, mode: str) -> None:
         if self._backend is None:
             _log.debug("player %d request_mode -> %s (no backend)", self.id, mode)
@@ -357,8 +362,11 @@ class Player:
     def ensure_ready(self) -> bool:
         """Recover from falls and switch to walk mode asynchronously.
 
-        Return whether the player is ready to act during this frame.
+        Return whether the player is ready to act during this frame. Mode
+        changes must wait for the get-up task, not just a normal fall snapshot.
         """
+        if self.is_getting_up:
+            return False
         if self.is_fallen:
             self.get_up()
             return False
