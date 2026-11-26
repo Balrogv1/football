@@ -23,7 +23,7 @@ from src.framework.types import (
 )
 from src.param import (
     DEFENDER_BALL_GAP_M,
-    DEFENDER_STANDOFF_M,
+    DEFENDER_DEPTH_MAX_M,
     GUARD_LINE_OFFSET_M,
     GUARD_POST_MARGIN_M,
     KICKOFF_CLEAR_M,
@@ -366,7 +366,7 @@ class DefenderTargetTest(unittest.TestCase):
     def test_defender_stands_in_front_of_our_goal(self):
         target = tactics.defender_target(make_context(ball=(0.0, 0.0)))
         self.assertGreater(target[0], -HALF_L)
-        self.assertLessEqual(target[0], -HALF_L + DEFENDER_STANDOFF_M + 1e-9)
+        self.assertLessEqual(target[0], -HALF_L + DEFENDER_DEPTH_MAX_M + 1e-9)
 
     def test_defender_stays_on_the_goal_to_ball_line(self):
         for ball in [(0.0, 2.0), (0.0, -2.0), (3.0, 3.0), (2.0, -1.5)]:
@@ -386,6 +386,19 @@ class DefenderTargetTest(unittest.TestCase):
         self.assertGreaterEqual(
             math.hypot(target[0], target[1]), DEFENDER_BALL_GAP_M - 1e-9,
         )
+
+    def test_defender_steps_further_out_for_a_distant_ball(self):
+        # A fixed short standoff would park the defender on the goal line and
+        # let an attacker walk past at midfield.
+        near = tactics.defender_target(make_context(ball=(-4.0, 0.0)))
+        far = tactics.defender_target(make_context(ball=(2.0, 0.0)))
+        self.assertGreater(far[0], near[0])
+
+    def test_defender_closes_on_the_ball_when_it_is_near(self):
+        ball = (-5.0, 0.0)
+        target = tactics.defender_target(make_context(ball=ball))
+        gap = math.hypot(target[0] - ball[0], target[1] - ball[1])
+        self.assertLessEqual(gap, DEFENDER_BALL_GAP_M + 0.05)
 
     def test_defender_never_leaves_the_field(self):
         for ball in [(0.0, 4.4), (0.0, -4.4), (-6.5, 4.4), (5.0, 4.4)]:
@@ -476,6 +489,83 @@ class ChoosePassTargetTest(unittest.TestCase):
     def test_opponent_beyond_the_goal_does_not_block_the_shot_lane(self):
         context = make_context(ball=(0.0, 0.0), opponents=[(9.0, 0.0)])
         self.assertIsNone(tactics.choose_pass_target(context, (4.0, 2.5)))
+
+
+class MeasureBallVelocityTest(unittest.TestCase):
+    def test_velocity_from_two_snapshots(self):
+        prev = (0.0, 0.0, 1.0)
+        ball = BallState(x=1.0, y=0.0)
+        vx, vy = tactics.measure_ball_velocity(prev, ball, 2.0)
+        self.assertAlmostEqual(vx, 1.0)
+        self.assertAlmostEqual(vy, 0.0)
+
+    def test_no_previous_snapshot_reports_zero(self):
+        ball = BallState(x=1.0, y=0.0)
+        self.assertEqual(tactics.measure_ball_velocity(None, ball, 2.0), (0.0, 0.0))
+
+    def test_missing_ball_reports_zero(self):
+        self.assertEqual(tactics.measure_ball_velocity((0.0, 0.0, 1.0), None, 2.0), (0.0, 0.0))
+
+    def test_repeated_timestamp_reports_zero(self):
+        prev = (0.0, 0.0, 1.0)
+        ball = BallState(x=5.0, y=5.0)
+        self.assertEqual(tactics.measure_ball_velocity(prev, ball, 1.0), (0.0, 0.0))
+
+    def test_restart_teleport_is_rejected(self):
+        # A restart moves the ball metres in one frame; that is not a pass.
+        prev = (0.0, 0.0, 1.0)
+        ball = BallState(x=12.0, y=8.0)
+        self.assertEqual(tactics.measure_ball_velocity(prev, ball, 1.1), (0.0, 0.0))
+
+
+class BlendVelocityTest(unittest.TestCase):
+    def test_full_smoothing_takes_the_new_sample(self):
+        # BALL_VELOCITY_SMOOTHING is 0.5 in the shipped parameters, so the
+        # blend must land between the two samples rather than on either end.
+        blended = tactics.blend_velocity((0.0, 0.0), (4.0, 2.0))
+        self.assertTrue(0.0 < blended[0] < 4.0)
+        self.assertTrue(0.0 < blended[1] < 2.0)
+
+    def test_zero_measurement_pulls_the_estimate_down(self):
+        blended = tactics.blend_velocity((4.0, 0.0), (0.0, 0.0))
+        self.assertLess(blended[0], 4.0)
+
+
+class ReceivingTargetTest(unittest.TestCase):
+    def test_stationary_ball_uses_the_normal_slot(self):
+        context = make_context(ball=(0.0, 0.0))
+        target = tactics.receiving_target(context, (1.0, -2.0), (0.0, 0.0))
+        self.assertEqual(target, tactics.second_attacker_target(context))
+
+    def test_slow_ball_uses_the_normal_slot(self):
+        context = make_context(ball=(0.0, 0.0))
+        target = tactics.receiving_target(context, (1.0, -2.0), (0.1, 0.0))
+        self.assertEqual(target, tactics.second_attacker_target(context))
+
+    def test_receiver_runs_onto_a_ball_rolling_toward_it(self):
+        # Ball at (0, 0) moving +x; receiver is ahead at x = 2, so it should
+        # meet the ball beyond its current position.
+        context = make_context(ball=(0.0, 0.0))
+        target = tactics.receiving_target(context, (2.0, 0.0), (3.0, 0.0))
+        self.assertGreater(target[0], 0.0)
+
+    def test_receiver_does_not_chase_a_ball_moving_away(self):
+        # Ball rolling away from a receiver behind it: no point leading.
+        context = make_context(ball=(0.0, 0.0))
+        target = tactics.receiving_target(context, (-2.0, 0.0), (3.0, 0.0))
+        self.assertEqual(target, tactics.second_attacker_target(context))
+
+    def test_lead_stays_inside_the_field(self):
+        context = make_context(ball=(6.0, 4.0))
+        target = tactics.receiving_target(context, (4.0, 4.0), (5.0, 5.0))
+        self.assertLessEqual(abs(target[0]), HALF_L)
+        self.assertLessEqual(abs(target[1]), HALF_W)
+
+    def test_missing_ball_returns_the_origin(self):
+        self.assertEqual(
+            tactics.receiving_target(make_context(ball=None), (1.0, 1.0), (2.0, 0.0)),
+            (0.0, 0.0),
+        )
 
 
 if __name__ == "__main__":

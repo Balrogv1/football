@@ -250,6 +250,79 @@ def second_attacker_target(context: Context) -> tuple[float, float]:
     return best
 
 
+def measure_ball_velocity(
+    prev: tuple[float, float, float] | None,
+    ball,
+    now: float,
+) -> tuple[float, float]:
+    """Estimate the ball's velocity from the previous frame's snapshot.
+
+    ``prev`` is ``(x, y, now)``. Restarts teleport the ball, which would read
+    as an enormous velocity and send the receiver sprinting at nothing, so a
+    speed above ``BALL_MAX_TRACKED_SPEED`` is reported as zero instead of
+    trusted. A missing or repeated snapshot also reports zero.
+    """
+    if prev is None or ball is None:
+        return (0.0, 0.0)
+    px, py, prev_now = prev
+    dt = now - prev_now
+    if dt <= 1e-6:
+        return (0.0, 0.0)
+    vx = (ball.x - px) / dt
+    vy = (ball.y - py) / dt
+    if math.hypot(vx, vy) > BALL_MAX_TRACKED_SPEED:
+        return (0.0, 0.0)
+    return (vx, vy)
+
+
+def blend_velocity(
+    previous: tuple[float, float], measured: tuple[float, float],
+) -> tuple[float, float]:
+    """Smooth a velocity estimate so one noisy frame cannot swing the target."""
+    alpha = BALL_VELOCITY_SMOOTHING
+    return (
+        previous[0] * (1.0 - alpha) + measured[0] * alpha,
+        previous[1] * (1.0 - alpha) + measured[1] * alpha,
+    )
+
+
+def receiving_target(
+    context: Context,
+    pose: tuple[float, float],
+    ball_velocity: tuple[float, float] = (0.0, 0.0),
+) -> tuple[float, float]:
+    """Return where the receiver should run: the ball's future position.
+
+    Standing on a fixed slot and waiting means a rolling pass arrives late and
+    the receiver has to turn back for it. When the ball is actually travelling
+    toward this player, the target is projected ``RECEIVE_LEAD_S`` along its
+    velocity so the robot meets the ball instead of chasing it.
+
+    A stationary ball, or one moving away, keeps the normal receiving slot:
+    leading a ball that is not coming here would just pull the receiver upfield
+    after our own dribble.
+    """
+    ball = context.ball
+    if ball is None:
+        return (0.0, 0.0)
+
+    vx, vy = ball_velocity
+    speed = math.hypot(vx, vy)
+    if speed < RECEIVE_LEAD_MIN_SPEED:
+        return second_attacker_target(context)
+
+    toward = (pose[0] - ball.x) * vx + (pose[1] - ball.y) * vy
+    if toward <= 0.0:
+        return second_attacker_target(context)
+
+    return clamp_inside_field(
+        context,
+        ball.x + vx * RECEIVE_LEAD_S,
+        ball.y + vy * RECEIVE_LEAD_S,
+        margin=RESTART_FIELD_MARGIN_M,
+    )
+
+
 def score_difference(context: Context) -> int:
     """Return our score minus the opponent's, or 0 when the score is unknown."""
     game = context.game
@@ -267,31 +340,32 @@ def score_difference(context: Context) -> int:
 
 
 def defender_target(context: Context) -> tuple[float, float]:
-    """Return the blocking position in front of our goal.
+    """Return the blocking position between the ball and our goal.
 
-    Standing on the line from the goal centre to the ball cuts the shooting
-    angle, which is the job the goalkeeper cannot do alone. The standoff keeps
-    a real gap from the ball so the defender never collides with it, and caps
-    the distance from the goal line so a shot from midfield does not pull the
-    defender out of position.
+    Standing on the goal-centre-to-ball line is what denies the shooting angle,
+    which is the job the goalkeeper cannot do alone. The position must sit in
+    the ball's actual path, though: a fixed short standoff parks the defender
+    near the goal line, where an attacker walks past it at midfield. So the
+    standoff tracks the ball — out to ``DEFENDER_DEPTH_MAX_M`` while the ball is
+    far, closing to a body's width once the ball is near enough to challenge.
     """
     field = context.field
-    gx = -field.length / 2.0
+    goal_line = -field.length / 2.0
     ball = context.ball
     if ball is None:
-        return (gx + DEFENDER_STANDOFF_M, 0.0)
+        return (goal_line + DEFENDER_DEPTH_MAX_M, 0.0)
 
-    dx, dy = ball.x - gx, ball.y
+    dx, dy = ball.x - goal_line, ball.y
     distance = math.hypot(dx, dy)
     if distance < 1e-6:
-        return (gx + DEFENDER_STANDOFF_M, 0.0)
+        return (goal_line + DEFENDER_DEPTH_MAX_M, 0.0)
 
     ux, uy = dx / distance, dy / distance
-    standoff = min(distance - DEFENDER_BALL_GAP_M, DEFENDER_STANDOFF_M)
+    standoff = min(distance - DEFENDER_BALL_GAP_M, DEFENDER_DEPTH_MAX_M)
     standoff = max(standoff, 0.0)
     return clamp_inside_field(
         context,
-        gx + ux * standoff,
+        goal_line + ux * standoff,
         uy * standoff,
         margin=RESTART_FIELD_MARGIN_M,
     )

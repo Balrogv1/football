@@ -130,6 +130,10 @@ class SoccerSimAgent(SoccerAgentMixin, AgentBase):
         store.set_play_type = None
         store.set_play_origin = None
         store.pass_lock_until = 0.0   # Holds a pass decision across frames
+        # Ball tracking for the receiver's lead: last snapshot and a smoothed
+        # velocity estimate, both updated once per frame in play().
+        store.ball_prev = None
+        store.ball_velocity = (0.0, 0.0)
 
     @staticmethod
     def play(context: Context, players: list[Player], store) -> None:
@@ -139,6 +143,9 @@ class SoccerSimAgent(SoccerAgentMixin, AgentBase):
 
         # Draw per-frame visualizations.
         _analyze_and_draw(context, players, store)
+
+        # Track the ball once per frame so the receiver can lead a pass.
+        _update_ball_velocity(context, store)
 
         # Draw the current phase as a label just outside the field.
         from .framework import debugdraw
@@ -226,6 +233,29 @@ def _fallen_time_cost(p: Player) -> float:
     return FALLEN_COST if p.is_fallen else 0.0
 
 
+def _update_ball_velocity(context: Context, store) -> None:
+    """Refresh the smoothed ball velocity estimate once per frame.
+
+    Estimated here rather than per player so every role sees the same number,
+    and smoothed so a single noisy snapshot cannot swing the receiver's target.
+    """
+    ball = context.ball
+    measured = tactics.measure_ball_velocity(
+        getattr(store, "ball_prev", None), ball, context.now,
+    )
+    store.ball_velocity = tactics.blend_velocity(
+        getattr(store, "ball_velocity", (0.0, 0.0)), measured,
+    )
+    store.ball_prev = (
+        None if ball is None else (ball.x, ball.y, context.now)
+    )
+
+
+def _ball_velocity(store) -> tuple[float, float]:
+    """Return the current velocity estimate, defaulting to stationary."""
+    return getattr(store, "ball_velocity", (0.0, 0.0))
+
+
 def _select_closest_attacker(
     context: Context,
     players: list[Player],
@@ -296,7 +326,7 @@ def _act_normal(context: Context, players: list[Player], store) -> None:
                 player.attack()
         elif role == "attack2":
             player.action = "attack2"
-            player.second_attack()
+            player.second_attack(_ball_velocity(store))
         elif role == "guard":
             player.action = "guard"
             player.guard()
@@ -428,7 +458,7 @@ def _kickoff_receiver_attacks(
             p.attack()
         elif p.id == store.kickoff_taker:
             p.action = "kickoff:support"
-            p.second_attack()
+            p.second_attack(_ball_velocity(store))
         else:
             p.action = "guard"
             p.guard()

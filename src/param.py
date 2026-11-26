@@ -115,8 +115,10 @@ RESTART_FIELD_MARGIN_M = 0.6           # Keep restart targets inside the lines
 # half, or with a lead to protect, one player pushes up and the third player
 # drops in front of the goal instead of waiting for a pass.
 DEFEND_LEAD_MARGIN = 1                 # Lead from which only one player pushes up
-DEFENDER_STANDOFF_M = 2.2              # Blocking position off our goal line
-DEFENDER_BALL_GAP_M = 1.2              # Never stand closer than this to the ball
+DEFENDER_DEPTH_MAX_M = 4.5             # Furthest upfield the covering defender holds
+DEFENDER_BALL_GAP_M = 1.0              # Never stand closer than this to the ball
+DEFENDER_CLEAR_M = 1.4                 # Ball this close to the defender gets cleared
+DEFENDER_CLEAR_POWER = 4.0             # Clearance power (away from our goal)
 
 # Second attacker: never challenges for the ball, so the two robots cannot
 # crowd each other. It holds a receiving position ahead of the ball, offset to
@@ -127,6 +129,13 @@ SECOND_ATTACK_LATERAL_M = 2.2          # Receiving slot to the open side
 # lane costs it the slot.
 RECEIVE_LANE_CLEAR_M = 0.5             # Opponent this close to the lane screens it
 RECEIVE_SCREEN_PENALTY = 10.0          # Score penalty when the lane is screened
+
+# Receiver lead. A pass in flight reaches the slot late if the receiver stands
+# still, so it runs to where the ball is going instead of where it is.
+RECEIVE_LEAD_S = 0.6                   # How far ahead to project a moving ball (s)
+RECEIVE_LEAD_MIN_SPEED = 0.6           # Below this the ball counts as stationary (m/s)
+BALL_MAX_TRACKED_SPEED = 15.0          # Faster than this is a teleport, not a pass
+BALL_VELOCITY_SMOOTHING = 0.5          # 0 = freeze the estimate, 1 = no smoothing
 
 # Goalkeeper: sit on the goal line, on the goal-centre-to-ball line.
 GUARD_LINE_OFFSET_M = 0.35             # How far off the goal line to stand

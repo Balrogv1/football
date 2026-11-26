@@ -28,6 +28,7 @@ from .tactics import (
     choose_shot_target,
     defender_target,
     guard_target,
+    receiving_target,
     second_attacker_target,
 )
 from .utils.geom import (
@@ -662,8 +663,8 @@ class Player:
                 _behind_ball(ball.x, ball.y, receiver_pos, CHASE_BEHIND_M)
             )
 
-    def second_attack(self) -> None:
-        """Hold a passing option ahead of the ball instead of challenging.
+    def second_attack(self, ball_velocity: tuple[float, float] = (0.0, 0.0)) -> None:
+        """Hold a passing option, running onto a moving ball.
 
         Two robots chasing the same ball crowd each other and leave nobody to
         receive, so the second attacker never contests possession. It keeps a
@@ -671,6 +672,10 @@ class Player:
         passing option or to pounce on a rebound, far enough that its path does
         not cross the ball carrier's, and more than 3 m from the ball so a long
         possession cannot book it for no activity.
+
+        ``ball_velocity`` comes from the frame's track. When a pass is rolling
+        toward this player the target moves to where the ball will be, so the
+        robot meets the ball instead of waiting for it and then turning back.
         """
         ctx = self.context
         pose = self.pose
@@ -680,7 +685,7 @@ class Player:
             return
 
         self.release_kick()
-        target = second_attacker_target(ctx)
+        target = receiving_target(ctx, (pose.x, pose.y), ball_velocity)
         self.walk_to(
             target,
             face=angle_to(pose.x, pose.y, ball.x, ball.y),
@@ -689,13 +694,17 @@ class Player:
         )
 
     def defend(self) -> None:
-        """Hold the blocking position in front of our goal.
+        """Body-block between the ball and our goal, clearing anything nearby.
 
         The goalkeeper can only cover the mouth, so a second body on the
         goal-to-ball line is what stops a counter-attack from becoming a clear
-        shot. This player never challenges for the ball: the attacker does
-        that, and two robots converging on the same ball would leave the goal
-        empty.
+        shot. Two details make this actually block:
+
+        * No ball avoidance while walking. ``walk_to``'s ball avoidance steers
+          the robot around a 0.5 m bubble, so a defender told to avoid the ball
+          steps aside from the very path it was sent to hold.
+        * The ball is cleared once it is within reach. Holding position while
+          the ball rolls past is the failure this role exists to prevent.
         """
         ctx = self.context
         pose = self.pose
@@ -705,13 +714,23 @@ class Player:
             return
 
         ball = ctx.ball
+        if ball is not None:
+            if dist(pose.x, pose.y, ball.x, ball.y) <= DEFENDER_CLEAR_M:
+                goal = opponent_goal(ctx)
+                self.action = "defend:clear"
+                self.kick(
+                    angle_to(ball.x, ball.y, goal[0], goal[1]),
+                    DEFENDER_CLEAR_POWER,
+                )
+                return
+
         target = defender_target(ctx)
         face = 0.0
         if ball is not None:
             face = angle_to(pose.x, pose.y, ball.x, ball.y)
         self.action = "defend:cover"
         self.release_kick()
-        self.walk_to(target, face=face, avoid_ball=True, avoid_robots=True)
+        self.walk_to(target, face=face, avoid_ball=False, avoid_robots=True)
 
     def guard(self) -> None:
         """Guard our goal from the goal line, on the shot's line.
@@ -733,6 +752,18 @@ class Player:
             return
 
         ball = ctx.ball if ctx is not None else None
+        if ball is not None:
+            if dist(pose.x, pose.y, ball.x, ball.y) <= DEFENDER_CLEAR_M:
+                # The ball has reached the keeper, so there is no goal left to
+                # guard: clear it rather than watch it roll in.
+                goal = opponent_goal(ctx)
+                self.action = "guard:clear"
+                self.kick(
+                    angle_to(ball.x, ball.y, goal[0], goal[1]),
+                    DEFENDER_CLEAR_POWER,
+                )
+                return
+
         home = guard_target(ctx)
 
         # Face the ball for faster reactions, or the opponent's goal if unseen.
