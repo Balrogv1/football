@@ -134,12 +134,19 @@ class SoccerSimAgent(SoccerAgentMixin, AgentBase):
         # velocity estimate, both updated once per frame in play().
         store.ball_prev = None
         store.ball_velocity = (0.0, 0.0)
+        store.kickoff_chase_until = 0.0  # Window where the loose ball is chased
 
     @staticmethod
     def play(context: Context, players: list[Player], store) -> None:
         phase = get_phase(context)
         store.prev_phase = store.cur_phase
         store.cur_phase = phase
+
+        # Leaving our own kick-off means the ball has just been played into the
+        # opponent half. Open a short window in which the second player chases
+        # that loose ball instead of dropping into the defensive shape.
+        if store.prev_phase == Phase.OUR_KICKOFF and phase == Phase.NORMAL:
+            store.kickoff_chase_until = context.now + KICKOFF_CHASE_S
 
         # Draw per-frame visualizations.
         _analyze_and_draw(context, players, store)
@@ -292,7 +299,10 @@ def _act_normal(context: Context, players: list[Player], store) -> None:
         (p.id, (p.pose.x, p.pose.y)) for p in players if p.pose is not None
     ]
     roles = tactics.assign_normal_roles(
-        context, candidates, getattr(store, "normal_attacker", None),
+        context,
+        candidates,
+        getattr(store, "normal_attacker", None),
+        chase=context.now < getattr(store, "kickoff_chase_until", 0.0),
     )
     store.normal_attacker = next(
         (player_id for player_id, role in roles.items() if role == "attack"),

@@ -423,6 +423,7 @@ def assign_normal_roles(
     context: Context,
     candidates: list[tuple[int, tuple[float, float]]],
     locked_attacker: int | None = None,
+    chase: bool = False,
 ) -> dict[int, str]:
     """Return the role name for each player id during normal play.
 
@@ -432,6 +433,11 @@ def assign_normal_roles(
     with the ball in our half, or with a lead to protect, only one robot
     pushes up so the goal is defended by two bodies instead of one. Leaving a
     single goalkeeper is how a lead turns into a shoot-out.
+
+    ``chase`` overrides that shape for the seconds right after our own kick-off.
+    A ball just played into the opponent half is a free ball, and dropping the
+    second player back as if defending a lead means nobody follows it up — the
+    defensive shape applies again as soon as the window closes.
 
     ``locked_attacker`` keeps the current ball carrier in the role until
     another player is clearly closer, so distance sorting cannot swap roles
@@ -464,8 +470,10 @@ def assign_normal_roles(
     ):
         attacker = locked_attacker
 
-    # Defending the lead, or defending our own half, costs one attacker.
-    defending = (
+    # Defending the lead, or defending our own half, costs one attacker. The
+    # post-kick-off chase window overrides both: a loose ball is worth more
+    # than the extra body until possession settles.
+    defending = not chase and (
         ball.x < 0.0 or score_difference(context) >= DEFEND_LEAD_MARGIN
     )
 

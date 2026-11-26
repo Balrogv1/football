@@ -101,6 +101,10 @@ KICKOFF_PUSH_POWER = 1.5               # 2.5 left the field; nudge just past 0.7
 KICKOFF_PUSH_FORWARD_M = 1.5           # Pass mostly sideways, to the taker's left
 KICKOFF_PUSH_LATERAL_M = 2.2           # ... on +y, where the receiver waits
 KICKOFF_RECEIVE_WINDOW_S = 1.5         # Receiver shoots for this long after the pass
+# Right after our own kick-off the ball is loose in the opponent half, so the
+# second player goes after it instead of dropping into the defensive shape —
+# protecting a lead must not mean ignoring a free ball.
+KICKOFF_CHASE_S = 2.5
 KICKOFF_CIRCLE_STANDOFF_M = 0.25       # Ready slot offset outside the circle
 KICKOFF_HOLD_BACK_M = 0.4              # Non-taker waits just behind the halfway line
 KICKOFF_HOLD_LATERAL_M = 3.3           # ... outside the circle and beyond 3 m of the ball

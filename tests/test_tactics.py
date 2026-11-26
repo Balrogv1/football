@@ -454,6 +454,33 @@ class DefensiveShapeTest(unittest.TestCase):
         )
         self.assertNotEqual(roles[2], roles[3])
 
+    def test_chase_window_keeps_two_attackers_while_leading(self):
+        # The seconds after our own kick-off: the ball is loose in the
+        # opponent half, so the second player follows it up instead of
+        # dropping back to protect the lead.
+        context = make_context(ball=(1.5, 2.0), our_score=3, their_score=0)
+        roles = tactics.assign_normal_roles(
+            context,
+            [(1, (1.2, 1.8)), (2, (-6.0, 0.0)), (3, (-0.4, 3.3))],
+            chase=True,
+        )
+        self.assertEqual(sorted(roles.values()), ["attack", "attack2", "guard"])
+
+    def test_without_the_chase_window_a_lead_still_drops_a_body_back(self):
+        context = make_context(ball=(1.5, 2.0), our_score=3, their_score=0)
+        roles = tactics.assign_normal_roles(
+            context,
+            [(1, (1.2, 1.8)), (2, (-6.0, 0.0)), (3, (-0.4, 3.3))],
+        )
+        self.assertEqual(sorted(roles.values()), ["attack", "defend", "guard"])
+
+    def test_chase_window_does_not_pull_a_defender_when_two_players(self):
+        context = make_context(ball=(1.5, 2.0), our_score=3)
+        roles = tactics.assign_normal_roles(
+            context, [(1, (1.2, 1.8)), (2, (-6.0, 0.0))], chase=True,
+        )
+        self.assertEqual(sorted(roles.values()), ["attack", "guard"])
+
 
 class ChoosePassTargetTest(unittest.TestCase):
     def test_no_pass_when_the_shot_lane_is_clear(self):
