@@ -79,8 +79,46 @@ CENTER_LEAVE_DIST_M = 0.15 # Distance from center at which the ball counts as mo
 OPP_SET_WALL_DIST_M = 2.0 # Blocking distance during an opponent kickoff
 
 # Opponent set plays: retreat threshold and field boundary margin (m).
-OPP_SET_PLAY_CLEARANCE_M = 1.5
+# The rule line is 1.45 m, so the target keeps a real margin rather than
+# sitting on the referee's tolerance.
+OPP_SET_PLAY_CLEARANCE_M = 1.7
 OPP_SET_PLAY_FIELD_MARGIN_M = 0.3
+# Hold the goal line only when the ball is this far away: the keeper exemption
+# covers distance, not standing still, and 3 m is where the no-activity rule
+# starts to apply.
+OPP_SET_PLAY_KEEPER_MIN_M = 3.2
+
+# Opponent kick-off: waiting players stay outside 3 m of the ball so a long
+# kick-off countdown cannot book them for no activity.
+OPP_KICKOFF_HOLD_BACK_M = 3.4
+OPP_KICKOFF_HOLD_LATERAL_M = 1.2
+
+# Restarts (kick-off and set plays). A goal from the restart spot only counts
+# after a second robot touches the ball or a touch beyond 0.5 m, so the taker
+# nudges the ball clear first. Keep both thresholds above 0.5 m with margin.
+KICKOFF_CLEAR_M = 0.75                 # Ball considered clear of the centre mark
+KICKOFF_PUSH_POWER = 3.0               # First-touch power (soft, stays in play)
+KICKOFF_PUSH_FORWARD_M = 2.2           # Push target ahead of the ball
+KICKOFF_PUSH_LATERAL_M = 1.6           # Push target to the open side
+KICKOFF_CIRCLE_STANDOFF_M = 0.25       # Ready slot offset outside the circle
+KICKOFF_HOLD_BACK_M = 2.4              # Non-taker hold spot in our own half
+KICKOFF_HOLD_LATERAL_M = 2.6           # ... and its lateral offset (keeps > 3 m)
+
+SET_PLAY_CLEAR_M = 0.7                 # Ball considered clear of the set-play spot
+SET_PLAY_PUSH_POWER = 3.0
+SET_PLAY_PUSH_FORWARD_M = 2.5          # Always toward the opponent half
+SET_PLAY_PUSH_CENTRE_GAIN = 0.3        # Pull the push target toward y = 0
+RESTART_FIELD_MARGIN_M = 0.6           # Keep restart targets inside the lines
+
+# Second attacker: joins the chase when close, holds a receiving slot when far.
+SECOND_ATTACK_CHASE_M = 3.2            # Commit to the ball inside this range
+SECOND_ATTACK_FORWARD_M = 1.5          # Receiving slot ahead of the ball
+SECOND_ATTACK_LATERAL_M = 2.0          # Receiving slot to the open side
+
+# Goalkeeper: sit on the goal line and track the ball across the mouth.
+GUARD_LINE_OFFSET_M = 0.35             # How far off the goal line to stand
+GUARD_TRACK_GAIN = 0.8                 # Fraction of the ball's y to mirror
+GUARD_POST_MARGIN_M = 0.15             # Stay this far inside each post
 
 
 # ======================================================================
@@ -96,6 +134,12 @@ CIRCLE_MARGIN_M = 0.3
 # ======================================================================
 
 GOAL_TARGET_DEPTH_M = 0.25              # Kick target depth inside the goal (m)
+
+# Shot placement: avoid the keeper instead of always hitting the goal centre.
+SHOT_AIM_CANDIDATES = 7                 # Sample points across the goal mouth
+SHOT_AIM_POST_MARGIN_M = 0.35           # Keep the aim off the posts (m)
+SHOT_AIM_OFFSET_PENALTY = 0.5           # Cost per metre of lateral deviation
+SHOT_OPEN_GOAL_CLEARANCE_M = 20.0       # Clearance assumed when no opponent is seen
 
 # ======================================================================
 # Obstacle geometry

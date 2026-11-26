@@ -22,6 +22,7 @@ from enum import Enum
 
 from booster_agent_framework import AgentBase
 
+from . import tactics
 from .framework.agent import SoccerAgentMixin
 from .framework.types import KICKING_TEAM_NONE, Context, GameState, SetPlay
 from .param import *
@@ -122,6 +123,10 @@ class SoccerSimAgent(SoccerAgentMixin, AgentBase):
         store.cur_phase = None
         store.kickoff_taker = None    # Locked taker ID, reselected for each kickoff
         store.normal_attacker = None
+        # Restart bookkeeping: a goal from a restart spot only counts once the
+        # ball has left it, so the origin has to survive across frames.
+        store.set_play_type = None
+        store.set_play_origin = None
 
     @staticmethod
     def play(context: Context, players: list[Player], store) -> None:
@@ -240,37 +245,53 @@ def _select_closest_attacker(
 
 
 def _act_normal(context: Context, players: list[Player], store) -> None:
-    """Assign the nearest player to attack, the next to guard, and others to support.
+    """Assign roles from the current snapshot: two attackers plus a guard.
 
-    ``players`` contains ready players with known poses. Assign and execute
-    their roles directly here.
+    ``tactics.assign_normal_roles`` owns the decision, so the role split stays
+    testable off the robot. With two available players one attacks and one
+    guards; the second attacker only exists when there are three.
     """
     if not players:
         return
 
-    attacker = _select_closest_attacker(
-        context, players, getattr(store, "normal_attacker", None),
+    candidates = [
+        (p.id, (p.pose.x, p.pose.y)) for p in players if p.pose is not None
+    ]
+    roles = tactics.assign_normal_roles(
+        context, candidates, getattr(store, "normal_attacker", None),
     )
-    store.normal_attacker = attacker.id
-    attacker.action = "attack"
-    attacker.attack()
+    store.normal_attacker = next(
+        (player_id for player_id, role in roles.items() if role == "attack"),
+        None,
+    )
 
-    # The remaining player nearest our goal becomes the guard.
-    rest = [p for p in players if p is not attacker]
-    if rest:
-        gx, gy = own_goal(context)
-        guard = min(rest, key=lambda p: _player_dist_to_position(p, (gx, gy)))
-        guard.guard()  
-        rest = [p for p in rest if p is not guard]
-
-    # All other players support.
-    for p in rest:
-        p.action = "support"
-        p.support()
+    by_id = {p.id: p for p in players}
+    for player_id, role in roles.items():
+        player = by_id.get(player_id)
+        if player is None:
+            continue
+        if role == "attack":
+            player.action = "attack"
+            player.attack()
+        elif role == "attack2":
+            player.action = "attack2"
+            player.second_attack()
+        elif role == "guard":
+            player.action = "guard"
+            player.guard()
+        else:
+            player.action = "support"
+            player.support()
 
 
 def _act_our_kickoff(context: Context, players: list[Player], store) -> None:
-    """Lock the nearest kickoff taker, assign a guard, and leave others in support."""
+    """Push the ball off the centre mark, then switch to normal play.
+
+    A goal from the kick-off spot only counts after a second robot touches the
+    ball or a touch more than 0.5 m away from it, so the taker nudges the ball
+    clear instead of shooting. Once the ball has left the spot, normal play
+    resumes and the shot counts.
+    """
     if not players:
         return
 
@@ -279,65 +300,171 @@ def _act_our_kickoff(context: Context, players: list[Player], store) -> None:
         # Select a new taker when entering the kickoff phase.
         store.kickoff_taker = _select_closest_attacker(context, players).id
 
+    ball = context.ball
+    if ball is None:
+        for p in players:
+            p.action = "stay"
+            p.stop()
+        return
+
+    if tactics.ball_left_restart(
+        context, tactics.kickoff_point(context), KICKOFF_CLEAR_M,
+    ):
+        # The ball is clear of the spot, so a goal from here is a legal one.
+        _act_normal(context, players, store)
+        return
+
     attacker_id = store.kickoff_taker
     attacker = next((p for p in players if p.id == attacker_id), None)
     if attacker is None:
-        return
+        attacker = _select_closest_attacker(context, players)
+        store.kickoff_taker = attacker.id
 
-    attacker.action = "kickoff"
-    attacker.kick(0.1, KICK_POWER_OUR_KICKOFF)
+    target = tactics.kickoff_push_target(context)
+    push_dir = angle_to(ball.x, ball.y, target[0], target[1])
+    attacker.action = "kickoff:push"
+    attacker.kick(push_dir, KICKOFF_PUSH_POWER)
 
     rest = [p for p in players if p is not attacker]
     if rest:
         gx, gy = own_goal(context)
         guard = min(rest, key=lambda p: _player_dist_to_position(p, (gx, gy)))
+        guard.action = "guard"
         guard.guard()
         rest = [p for p in rest if p is not guard]
 
+    # Everyone else holds a legal spot in our own half: a non-taker must stay
+    # in its own half and outside the centre circle until the ball is played.
+    side = 1.0 if target[1] >= 0.0 else -1.0
+    hold = (-KICKOFF_HOLD_BACK_M, side * KICKOFF_HOLD_LATERAL_M)
     for p in rest:
-        p.action = "stay"
-        p.stop()
+        p.action = "kickoff:hold"
+        p.walk_to(hold, face=push_dir, avoid_ball=True, avoid_robots=True)
 
 
 def _act_opp_kickoff(context: Context, players: list[Player]) -> None:
-    """Guard with one player while the others wait outside the center circle."""
+    """Guard with one player while the others wait outside the centre circle.
+
+    The waiting spots sit more than 3 m from the ball, so a kick-off countdown
+    cannot book a stationary robot for no activity.
+    """
     if not players:
         return
     gx, gy = own_goal(context)
     guard = min(players, key=lambda p: _player_dist_to_position(p, (gx, gy)))
+    guard.action = "guard"
     guard.guard()
 
+    ball = context.ball
+    bx, by = (ball.x, ball.y) if ball is not None else (0.0, 0.0)
     rest = [p for p in players if p is not guard]
-    r = context.field.circle_radius
-    slots = [(-r - 0.5, 0.0), (-r - 2.0, 0.5)]
+    slots = [
+        (bx - OPP_KICKOFF_HOLD_BACK_M, by + OPP_KICKOFF_HOLD_LATERAL_M),
+        (bx - OPP_KICKOFF_HOLD_BACK_M, by - OPP_KICKOFF_HOLD_LATERAL_M),
+    ]
     for p, target in zip(rest, slots):
-        p.action = "opp_kickoff:ready"
+        p.action = "opp_kickoff:hold"
         p.walk_to(target, avoid_ball=True, avoid_robots=True)
 
 
 def _act_our_set_play(context: Context, players: list[Player], store) -> None:
-    """Dispatch our set play by type. TODO: add strategy; defaults to normal."""
+    """Push the ball off the restart spot, then play on normally.
+
+    Every set play is subject to the same rule as the kick-off: a goal straight
+    from the spot does not count, so the taker's first touch nudges the ball
+    clear of it. The push target is always toward the opponent's half, which
+    also keeps the first touch away from our own goal.
+
+    The spot is remembered in ``store`` because the ball drifts over several
+    frames; the origin resets whenever the set-play type changes.
+    """
+    if not players:
+        return
+
     set_play = get_set_play_type(context)
-    if set_play == SetPlay.THROW_IN:
+    ball = context.ball
+    if (
+        store.prev_phase != Phase.OUR_SET_PLAY
+        or store.set_play_type != set_play
+        or store.set_play_origin is None
+    ):
+        store.set_play_type = set_play
+        store.set_play_origin = (ball.x, ball.y) if ball is not None else None
+
+    if ball is None or store.set_play_origin is None:
+        for p in players:
+            p.action = "set:wait"
+            p.stop()
+        return
+
+    if tactics.ball_left_restart(
+        context, store.set_play_origin, SET_PLAY_CLEAR_M,
+    ):
+        # The ball is clear of the spot, so a goal from here counts.
         _act_normal(context, players, store)
         return
-    if set_play == SetPlay.CORNER_KICK:
-        _act_normal(context, players, store)
-        return
-    if set_play == SetPlay.GOAL_KICK:
-        _act_normal(context, players, store)
-        return
-    _act_normal(context, players, store)
+
+    taker = _select_closest_attacker(context, players)
+    target = tactics.set_play_push_target(context)
+    push_dir = angle_to(ball.x, ball.y, target[0], target[1])
+    taker.action = "set:push"
+    taker.kick(push_dir, SET_PLAY_PUSH_POWER)
+
+    rest = [p for p in players if p is not taker]
+    if len(rest) >= 2:
+        # A runner follows the push so the second touch is available at once.
+        runner = _select_closest_attacker(context, rest)
+        runner.action = "set:follow"
+        runner.walk_to(target, face=push_dir, avoid_ball=True, avoid_robots=True)
+        rest = [p for p in rest if p is not runner]
+
+    if rest:
+        gx, gy = own_goal(context)
+        guard = min(rest, key=lambda p: _player_dist_to_position(p, (gx, gy)))
+        guard.action = "guard"
+        guard.guard()
+
+
+def _select_opp_set_keeper(
+    context: Context, players: list[Player],
+) -> Player | None:
+    """Pick the player who may hold the goal line during an opponent restart.
+
+    Returns None when the ball is close enough that standing still on the line
+    would break either the 1.45 m clearance or the no-activity rule, or when
+    only one player is available and the retreat matters more.
+    """
+    ball = context.ball
+    if ball is None or len(players) < 2:
+        return None
+    gx, gy = own_goal(context)
+    candidate = min(players, key=lambda p: _player_dist_to_position(p, (gx, gy)))
+    home = tactics.guard_target(context)
+    if dist(ball.x, ball.y, home[0], home[1]) < OPP_SET_PLAY_KEEPER_MIN_M:
+        return None
+    return candidate
 
 
 def _act_opp_set_play(context: Context, players: list[Player], store) -> None:
-    """Retreat directly from the ball; wait until the official phase changes."""
+    """Keep clear of the ball, leaving one player on the goal line when safe.
+
+    The referee penalises any defender inside 1.45 m of the restart spot before
+    the ball is played, so retreating is the default. A goalkeeper standing on
+    the goal line inside the mouth is exempt, and abandoning the goal on every
+    opponent restart is how easy goals go in, so one player holds the line when
+    the ball is far enough away that neither rule can bite.
+    """
     ball = context.ball
+    keeper = _select_opp_set_keeper(context, players)
     # Account for walk_to's arrival tolerance when targeting the 1.5 m boundary.
     radius = OPP_SET_PLAY_CLEARANCE_M + ARRIVE_DIST
     half_l = context.field.length / 2.0 - OPP_SET_PLAY_FIELD_MARGIN_M
     half_w = context.field.width / 2.0 - OPP_SET_PLAY_FIELD_MARGIN_M
     for p in players:
+        if p is keeper:
+            p.action = "guard"
+            p.guard()
+            continue
         pose = p.pose
         p.action = "opp_set:wait"
         if ball is None or pose is None:
@@ -387,68 +514,25 @@ def _act_opp_set_play(context: Context, players: list[Player], store) -> None:
 
 
 def _act_ready(context: Context, players: list[Player]) -> None:
-    """Move each player to a ready position."""
-    game = context.game
-    our_kickoff = game is not None and game.kicking_team == context.team_id
-    field = context.field
-    # Our kickoff priority: center-circle edge, goal-area center, then left side.
-    if our_kickoff:
-        if len(players) >= 1:
-            p1 = players[0]
-            p1.action = "ready"
-            p1.walk_to(
-                (-field.circle_radius, 0.0),
-                face=0.0,
-                avoid_ball=True,
-                avoid_robots=True,
-            )
-        if len(players) >= 2:
-            p2 = players[1]
-            p2.action = "ready"
-            p2.walk_to(
-                (-field.length / 2.0 + field.goal_area_length, 0.0),
-                face=0.0,
-                avoid_ball=True,
-                avoid_robots=True,
-            )
-        if len(players) >= 3:
-            p3 = players[2]
-            p3.action = "ready"
-            p3.walk_to(
-                (-0.5, field.circle_radius + 2),
-                face=0.0,
-                avoid_ball=True,
-                avoid_robots=True,
-            )
-    # Opponent kickoff priority: outside center circle, goal area, then penalty area.
-    else:
-        if len(players) >= 1:
-            p1 = players[0]
-            p1.action = "ready"
-            p1.walk_to(
-                (-field.circle_radius - 0.5, 0.0),
-                face=0.0,
-                avoid_ball=True,
-                avoid_robots=True,
-            )
-        if len(players) >= 2:
-            p2 = players[1]
-            p2.action = "ready"
-            p2.walk_to(
-                (-field.length / 2.0 + field.goal_area_length, 0.0),
-                face=0.0,
-                avoid_ball=True,
-                avoid_robots=True,
-            )
-        if len(players) >= 3:
-            p3 = players[2]
-            p3.action = "ready"
-            p3.walk_to(
-                (-field.length / 2.0 + field.penalty_area_length, 0.0),
-                face=0.0,
-                avoid_ball=True,
-                avoid_robots=True,
-            )
+    """Move each player to its READY slot, assigned by player id.
+
+    The slot comes from ``tactics.ready_slots`` rather than the player list
+    index, so penalising one robot cannot leave the others in each other's
+    spots and draw an illegal-positioning penalty.
+    """
+    slots = tactics.ready_slots(context, [p.id for p in players])
+    for p in players:
+        target = slots.get(p.id)
+        p.action = "ready"
+        if target is None:
+            p.stop()
+            continue
+        p.walk_to(
+            target,
+            face=0.0,
+            avoid_ball=True,
+            avoid_robots=True,
+        )
 
 
 

@@ -1,8 +1,1 @@
-{
-    "version": 2,
-    "scene": {
-        "mode": "pinned",
-        "id": "football3v3"
-    },
-    "projectMode": "soccer-match"
-}
+{"version":2,"scene":{"mode":"pinned","id":"football3v3"},"projectMode":"soccer-match","agentDevTarget":{"serialNumber":"2wmy9","name":"f1","model":"Booster K1","robotType":"RemoteVirtualRobot","deviceType":"virtual","updatedAt":1795682325624},"updatedAt":1795682325722}

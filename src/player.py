@@ -24,6 +24,7 @@ from .framework.types import Context, Penalty, Pose2D
 from .framework import debugdraw
 
 from .param import *
+from .tactics import choose_shot_target, guard_target, second_attacker_target
 from .utils.geom import (
     angle_to,
     clamp,
@@ -31,7 +32,6 @@ from .utils.geom import (
     normalize_angle,
     opponent_goal,
     own_goal,
-    own_goal_area_center,
 )
 from .utils.obstacles import collect_obstacles
 from .utils.path_planner import plan_global_path
@@ -240,16 +240,17 @@ class Player:
     def plan_kick(self) -> tuple[float, float] | None:
         """Calculate kick direction and power.
 
-        Aim from the current ball position toward the opponent's goal center.
-        Return ``(kick_direction, kick_power)``, or None when the ball or context
-        is unavailable.
+        Aim at the emptiest part of the opponent's goal mouth rather than the
+        centre, so a keeper standing in the middle does not swallow every shot.
+        Return ``(kick_direction, kick_power)``, or None when the ball or
+        context is unavailable.
         """
         ctx = self.context
         ball = ctx.ball if ctx is not None else None
         if ctx is None or ball is None:
             return None
 
-        kick_target = opponent_goal(ctx)
+        kick_target = choose_shot_target(ctx)
         kick_direction = angle_to(ball.x, ball.y, *kick_target)
         kick_target = self._goal_target_for_direction(kick_direction)
         kick_power = (
@@ -590,7 +591,9 @@ class Player:
         ty = ay + vy * t
         return tx, ty, dist(pose.x, pose.y, tx, ty), raw_t
 
-    def attack(self, kick_target: tuple[float, float] | None = None) -> None:
+    def attack(
+        self, kick_target: tuple[float, float] | None = None, *, avoid: bool = False,
+    ) -> None:
         """Chase the ball and shoot toward ``kick_target`` or the opponent goal.
 
         Kick hysteresis enters below ENTER and exits above EXIT, where EXIT is
@@ -598,6 +601,10 @@ class Player:
         approach the ball directly without avoidance. The chase target lies
         ``CHASE_BEHIND_M`` behind the ball on the ball-to-goal line, naturally
         aligning the player for a shot on arrival.
+
+        ``avoid`` enables path avoidance while chasing, which the second
+        attacker uses so two robots do not drive into each other on the same
+        line to the ball.
         """
         ctx = self.context
         pose = self.pose
@@ -620,23 +627,56 @@ class Player:
         else:
             self.release_kick()
             self.walk_to(
-                _behind_ball(ball.x, ball.y, kick_target, CHASE_BEHIND_M)
+                _behind_ball(ball.x, ball.y, kick_target, CHASE_BEHIND_M),
+                avoid_ball=avoid,
+                avoid_robots=avoid,
             )
 
-    def guard(self) -> None:
-        """Guard from the center of the goal area.
+    def second_attack(self) -> None:
+        """Keep the pressure up as the second attacker.
 
-        Fall back to that position when no active threat is available.
+        Committing to the ball from two sides beats a single chaser, but two
+        robots on the same line only block each other. Inside
+        ``SECOND_ATTACK_CHASE_M`` this player joins the challenge; further out
+        it holds a receiving slot ahead of the ball on the open side, which
+        also keeps it moving and clear of the no-activity rule.
         """
         ctx = self.context
         pose = self.pose
-        home = own_goal_area_center(ctx) if ctx is not None else None
-        if home is None or pose is None:
+        ball = ctx.ball if ctx is not None else None
+        if ctx is None or ball is None or pose is None:
+            self.stop()
+            return
+
+        if dist(pose.x, pose.y, ball.x, ball.y) <= SECOND_ATTACK_CHASE_M:
+            self.attack(avoid=True)
+            return
+
+        self.release_kick()
+        target = second_attacker_target(ctx)
+        self.walk_to(
+            target,
+            face=angle_to(pose.x, pose.y, ball.x, ball.y),
+            avoid_ball=True,
+            avoid_robots=True,
+        )
+
+    def guard(self) -> None:
+        """Guard our goal from the goal line, tracking the ball.
+
+        Standing at the goal-area centre leaves both corners open and lets a
+        shot from an angle beat the keeper. The goal line inside the mouth
+        covers the whole width, and the lateral position follows the ball.
+        """
+        ctx = self.context
+        pose = self.pose
+        if ctx is None or pose is None:
             self.action = "guard:stop"
             self.stop()
             return
 
         ball = ctx.ball if ctx is not None else None
+        home = guard_target(ctx)
 
         # Face the ball for faster reactions, or the opponent's goal if unseen.
         face = 0.0
