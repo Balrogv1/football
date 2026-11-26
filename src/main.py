@@ -333,11 +333,16 @@ def _act_our_kickoff(context: Context, players: list[Player], store) -> None:
         guard.guard()
         rest = [p for p in rest if p is not guard]
 
-    # Everyone else holds a legal spot in our own half: a non-taker must stay
-    # in its own half and outside the centre circle until the ball is played.
-    side = 1.0 if target[1] >= 0.0 else -1.0
-    hold = (-KICKOFF_HOLD_BACK_M, side * KICKOFF_HOLD_LATERAL_M)
+    # Everyone else waits just behind the halfway line, outside the centre
+    # circle and more than 3 m from the ball. A non-taker may not cross the
+    # halfway line or enter the circle until the ball is played, so this is as
+    # far forward as the rules allow; once the ball clears the spot the phase
+    # switches to normal play and this robot pushes up to its receiving slot.
     for p in rest:
+        pose = p.pose
+        # Stay on the side the robot already occupies rather than crossing over.
+        side = 1.0 if pose is None or pose.y >= 0.0 else -1.0
+        hold = (-KICKOFF_HOLD_BACK_M, side * KICKOFF_HOLD_LATERAL_M)
         p.action = "kickoff:hold"
         p.walk_to(hold, face=push_dir, avoid_ball=True, avoid_robots=True)
 

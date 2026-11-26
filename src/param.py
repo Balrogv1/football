@@ -97,12 +97,12 @@ OPP_KICKOFF_HOLD_LATERAL_M = 1.2
 # after a second robot touches the ball or a touch beyond 0.5 m, so the taker
 # nudges the ball clear first. Keep both thresholds above 0.5 m with margin.
 KICKOFF_CLEAR_M = 0.75                 # Ball considered clear of the centre mark
-KICKOFF_PUSH_POWER = 3.0               # First-touch power (soft, stays in play)
-KICKOFF_PUSH_FORWARD_M = 2.2           # Push target ahead of the ball
-KICKOFF_PUSH_LATERAL_M = 1.6           # Push target to the open side
+KICKOFF_PUSH_POWER = 1.0               # Minimum power: the spot is 7.6 m from a line
+KICKOFF_PUSH_FORWARD_M = 2.5           # Push target ahead of the ball
+KICKOFF_PUSH_LATERAL_M = 1.0           # Push target to the open side
 KICKOFF_CIRCLE_STANDOFF_M = 0.25       # Ready slot offset outside the circle
-KICKOFF_HOLD_BACK_M = 2.4              # Non-taker hold spot in our own half
-KICKOFF_HOLD_LATERAL_M = 2.6           # ... and its lateral offset (keeps > 3 m)
+KICKOFF_HOLD_BACK_M = 0.4              # Non-taker waits just behind the halfway line
+KICKOFF_HOLD_LATERAL_M = 3.3           # ... outside the circle and beyond 3 m of the ball
 
 SET_PLAY_CLEAR_M = 0.7                 # Ball considered clear of the set-play spot
 SET_PLAY_PUSH_POWER = 3.0
@@ -110,10 +110,11 @@ SET_PLAY_PUSH_FORWARD_M = 2.5          # Always toward the opponent half
 SET_PLAY_PUSH_CENTRE_GAIN = 0.3        # Pull the push target toward y = 0
 RESTART_FIELD_MARGIN_M = 0.6           # Keep restart targets inside the lines
 
-# Second attacker: joins the chase when close, holds a receiving slot when far.
-SECOND_ATTACK_CHASE_M = 3.2            # Commit to the ball inside this range
-SECOND_ATTACK_FORWARD_M = 1.5          # Receiving slot ahead of the ball
-SECOND_ATTACK_LATERAL_M = 2.0          # Receiving slot to the open side
+# Second attacker: never challenges for the ball, so the two robots cannot
+# crowd each other. It holds a receiving position ahead of the ball, offset to
+# the open side, which is both a passing option and a rebound station.
+SECOND_ATTACK_FORWARD_M = 2.6          # Receiving slot ahead of the ball
+SECOND_ATTACK_LATERAL_M = 2.2          # Receiving slot to the open side
 
 # Goalkeeper: sit on the goal line and track the ball across the mouth.
 GUARD_LINE_OFFSET_M = 0.35             # How far off the goal line to stand

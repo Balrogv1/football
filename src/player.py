@@ -633,23 +633,20 @@ class Player:
             )
 
     def second_attack(self) -> None:
-        """Keep the pressure up as the second attacker.
+        """Hold a passing option ahead of the ball instead of challenging.
 
-        Committing to the ball from two sides beats a single chaser, but two
-        robots on the same line only block each other. Inside
-        ``SECOND_ATTACK_CHASE_M`` this player joins the challenge; further out
-        it holds a receiving slot ahead of the ball on the open side, which
-        also keeps it moving and clear of the no-activity rule.
+        Two robots chasing the same ball crowd each other and leave nobody to
+        receive, so the second attacker never contests possession. It keeps a
+        slot ahead of the ball on the open side: close enough to be a short
+        passing option or to pounce on a rebound, far enough that its path does
+        not cross the ball carrier's, and more than 3 m from the ball so a long
+        possession cannot book it for no activity.
         """
         ctx = self.context
         pose = self.pose
         ball = ctx.ball if ctx is not None else None
         if ctx is None or ball is None or pose is None:
             self.stop()
-            return
-
-        if dist(pose.x, pose.y, ball.x, ball.y) <= SECOND_ATTACK_CHASE_M:
-            self.attack(avoid=True)
             return
 
         self.release_kick()

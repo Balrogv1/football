@@ -11,4 +11,5 @@ This strategy framework has been greatly simplified to make it easier for player
 
 # References
 [BoosterOS Developer API Document](https://booster.feishu.cn/wiki/Fjj9wJS4OivUSaksW2HctpVonTh)
-[Booster Agent Developer Guide](https://itq6ucn0mk.feishu.cn/wiki/J0FywI2CdinfU0kKLKycNiqfnwc?from=from_copylink)
+[Booster Agent Developer Guide](https://itq6ucn0mk.feishu.cn/wiki/J0FywI2CdinfU0kKLKycNiqfnwc?from=from_copylink)# football
+# football

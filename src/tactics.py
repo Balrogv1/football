@@ -158,7 +158,13 @@ def guard_target(context: Context) -> tuple[float, float]:
 
 
 def second_attacker_target(context: Context) -> tuple[float, float]:
-    """Hold a receiving position ahead of the ball, on the open side."""
+    """Return the receiving slot for the second attacker.
+
+    The slot sits ahead of the ball on the open side, so it is a short passing
+    option and a rebound station at once. Picking the side away from the
+    nearest opponent keeps the lane to it clear, and the offset from the
+    ball's own line keeps this robot out of the ball carrier's path.
+    """
     ball = context.ball
     if ball is None:
         return (0.0, 0.0)
