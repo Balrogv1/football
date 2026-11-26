@@ -122,11 +122,14 @@ class SoccerSimAgent(SoccerAgentMixin, AgentBase):
         store.prev_phase = None       # Previous phase, used to detect transitions
         store.cur_phase = None
         store.kickoff_taker = None    # Locked taker ID, reselected for each kickoff
+        store.kickoff_receiver = None # Receiver of the kick-off pass
+        store.kickoff_released_at = None  # When the ball left the centre spot
         store.normal_attacker = None
         # Restart bookkeeping: a goal from a restart spot only counts once the
         # ball has left it, so the origin has to survive across frames.
         store.set_play_type = None
         store.set_play_origin = None
+        store.pass_lock_until = 0.0   # Holds a pass decision across frames
 
     @staticmethod
     def play(context: Context, players: list[Player], store) -> None:
@@ -245,11 +248,12 @@ def _select_closest_attacker(
 
 
 def _act_normal(context: Context, players: list[Player], store) -> None:
-    """Assign roles from the current snapshot: two attackers plus a guard.
+    """Assign roles from the current snapshot.
 
     ``tactics.assign_normal_roles`` owns the decision, so the role split stays
-    testable off the robot. With two available players one attacks and one
-    guards; the second attacker only exists when there are three.
+    testable off the robot. Three players either field two attackers plus a
+    guard, or one attacker plus a guard and a covering defender; two players
+    always split into one attacker and one guard.
     """
     if not players:
         return
@@ -266,39 +270,89 @@ def _act_normal(context: Context, players: list[Player], store) -> None:
     )
 
     by_id = {p.id: p for p in players}
+    positions = dict(candidates)
+
+    # The second attacker is the only intended receiver for a pass.
+    receiver_pos = next(
+        (
+            positions[player_id]
+            for player_id, role in roles.items()
+            if role == "attack2" and player_id in positions
+        ),
+        None,
+    )
+
     for player_id, role in roles.items():
         player = by_id.get(player_id)
         if player is None:
             continue
         if role == "attack":
-            player.action = "attack"
-            player.attack()
+            pass_target = _pass_target(context, receiver_pos, store)
+            if pass_target is not None:
+                player.action = "attack:pass"
+                player.pass_to(pass_target)
+            else:
+                player.action = "attack"
+                player.attack()
         elif role == "attack2":
             player.action = "attack2"
             player.second_attack()
         elif role == "guard":
             player.action = "guard"
             player.guard()
+        elif role == "defend":
+            player.action = "defend"
+            player.defend()
         else:
             player.action = "support"
             player.support()
 
 
+def _pass_target(
+    context: Context,
+    receiver_pos: tuple[float, float] | None,
+    store,
+) -> tuple[float, float] | None:
+    """Decide whether the ball carrier should pass, holding the choice briefly.
+
+    The decision flips frame to frame as opponents drift around the lane, and a
+    carrier that alternates between shooting and passing never commits to
+    either. Once a pass is chosen it is held for ``PASS_LOCK_S``.
+    """
+    if receiver_pos is None:
+        return None
+    now = context.now
+    if now < getattr(store, "pass_lock_until", 0.0):
+        return receiver_pos
+    target = tactics.choose_pass_target(context, receiver_pos)
+    if target is not None:
+        store.pass_lock_until = now + PASS_LOCK_S
+    return target
+
+
 def _act_our_kickoff(context: Context, players: list[Player], store) -> None:
-    """Push the ball off the centre mark, then switch to normal play.
+    """Pass the ball to the taker's left, let the receiver shoot, then play on.
 
     A goal from the kick-off spot only counts after a second robot touches the
-    ball or a touch more than 0.5 m away from it, so the taker nudges the ball
-    clear instead of shooting. Once the ball has left the spot, normal play
-    resumes and the shot counts.
+    ball or a touch more than 0.5 m away from it, so the first touch is a pass
+    to the second attacker rather than a shot. For a short window after the
+    pass the receiver attacks and the taker drops into support: that is what
+    turns the pass into a shot instead of leaving both robots chasing the same
+    ball.
     """
     if not players:
         return
 
     active_ids = {p.id for p in players}
     if store.prev_phase != Phase.OUR_KICKOFF or store.kickoff_taker not in active_ids:
-        # Select a new taker when entering the kickoff phase.
-        store.kickoff_taker = _select_closest_attacker(context, players).id
+        # Select a new taker and receiver when entering the kickoff phase.
+        taker = _select_closest_attacker(context, players)
+        store.kickoff_taker = taker.id
+        others = [p for p in players if p is not taker]
+        store.kickoff_receiver = (
+            _select_closest_attacker(context, others).id if others else None
+        )
+        store.kickoff_released_at = None
 
     ball = context.ball
     if ball is None:
@@ -311,6 +365,8 @@ def _act_our_kickoff(context: Context, players: list[Player], store) -> None:
         context, tactics.kickoff_point(context), KICKOFF_CLEAR_M,
     ):
         # The ball is clear of the spot, so a goal from here is a legal one.
+        if _kickoff_receiver_attacks(context, players, store):
+            return
         _act_normal(context, players, store)
         return
 
@@ -322,7 +378,7 @@ def _act_our_kickoff(context: Context, players: list[Player], store) -> None:
 
     target = tactics.kickoff_push_target(context)
     push_dir = angle_to(ball.x, ball.y, target[0], target[1])
-    attacker.action = "kickoff:push"
+    attacker.action = "kickoff:pass"
     attacker.kick(push_dir, KICKOFF_PUSH_POWER)
 
     rest = [p for p in players if p is not attacker]
@@ -333,18 +389,50 @@ def _act_our_kickoff(context: Context, players: list[Player], store) -> None:
         guard.guard()
         rest = [p for p in rest if p is not guard]
 
-    # Everyone else waits just behind the halfway line, outside the centre
-    # circle and more than 3 m from the ball. A non-taker may not cross the
-    # halfway line or enter the circle until the ball is played, so this is as
-    # far forward as the rules allow; once the ball clears the spot the phase
-    # switches to normal play and this robot pushes up to its receiving slot.
+    # The receiver waits on the taker's left, just behind the halfway line and
+    # outside the centre circle. A non-taker may not cross the halfway line or
+    # enter the circle until the ball is played, so this is as far forward as
+    # the rules allow.
     for p in rest:
-        pose = p.pose
-        # Stay on the side the robot already occupies rather than crossing over.
-        side = 1.0 if pose is None or pose.y >= 0.0 else -1.0
-        hold = (-KICKOFF_HOLD_BACK_M, side * KICKOFF_HOLD_LATERAL_M)
-        p.action = "kickoff:hold"
-        p.walk_to(hold, face=push_dir, avoid_ball=True, avoid_robots=True)
+        p.action = "kickoff:receive"
+        p.walk_to(
+            (-KICKOFF_HOLD_BACK_M, KICKOFF_HOLD_LATERAL_M),
+            face=push_dir,
+            avoid_ball=True,
+            avoid_robots=True,
+        )
+
+
+def _kickoff_receiver_attacks(
+    context: Context, players: list[Player], store,
+) -> bool:
+    """Send the receiver at the ball for a short window after the pass.
+
+    Returns False once the window has passed, so normal play takes over. When
+    the receiver is unavailable the caller falls straight through to normal
+    play rather than leaving the team standing around.
+    """
+    if store.kickoff_released_at is None:
+        store.kickoff_released_at = context.now
+    if context.now - store.kickoff_released_at > KICKOFF_RECEIVE_WINDOW_S:
+        return False
+
+    by_id = {p.id: p for p in players}
+    receiver = by_id.get(store.kickoff_receiver)
+    if receiver is None:
+        return False
+
+    for p in players:
+        if p is receiver:
+            p.action = "kickoff:shoot"
+            p.attack()
+        elif p.id == store.kickoff_taker:
+            p.action = "kickoff:support"
+            p.second_attack()
+        else:
+            p.action = "guard"
+            p.guard()
+    return True
 
 
 def _act_opp_kickoff(context: Context, players: list[Player]) -> None:

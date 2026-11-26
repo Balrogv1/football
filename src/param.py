@@ -97,9 +97,10 @@ OPP_KICKOFF_HOLD_LATERAL_M = 1.2
 # after a second robot touches the ball or a touch beyond 0.5 m, so the taker
 # nudges the ball clear first. Keep both thresholds above 0.5 m with margin.
 KICKOFF_CLEAR_M = 0.75                 # Ball considered clear of the centre mark
-KICKOFF_PUSH_POWER = 1.0               # Minimum power: the spot is 7.6 m from a line
-KICKOFF_PUSH_FORWARD_M = 2.5           # Push target ahead of the ball
-KICKOFF_PUSH_LATERAL_M = 1.0           # Push target to the open side
+KICKOFF_PUSH_POWER = 1.5               # 2.5 left the field; nudge just past 0.75 m
+KICKOFF_PUSH_FORWARD_M = 1.5           # Pass mostly sideways, to the taker's left
+KICKOFF_PUSH_LATERAL_M = 2.2           # ... on +y, where the receiver waits
+KICKOFF_RECEIVE_WINDOW_S = 1.5         # Receiver shoots for this long after the pass
 KICKOFF_CIRCLE_STANDOFF_M = 0.25       # Ready slot offset outside the circle
 KICKOFF_HOLD_BACK_M = 0.4              # Non-taker waits just behind the halfway line
 KICKOFF_HOLD_LATERAL_M = 3.3           # ... outside the circle and beyond 3 m of the ball
@@ -110,16 +111,27 @@ SET_PLAY_PUSH_FORWARD_M = 2.5          # Always toward the opponent half
 SET_PLAY_PUSH_CENTRE_GAIN = 0.3        # Pull the push target toward y = 0
 RESTART_FIELD_MARGIN_M = 0.6           # Keep restart targets inside the lines
 
+# Team shape. The ball carrier alone cannot hold a lead: with the ball in our
+# half, or with a lead to protect, one player pushes up and the third player
+# drops in front of the goal instead of waiting for a pass.
+DEFEND_LEAD_MARGIN = 1                 # Lead from which only one player pushes up
+DEFENDER_STANDOFF_M = 2.2              # Blocking position off our goal line
+DEFENDER_BALL_GAP_M = 1.2              # Never stand closer than this to the ball
+
 # Second attacker: never challenges for the ball, so the two robots cannot
 # crowd each other. It holds a receiving position ahead of the ball, offset to
 # the open side, which is both a passing option and a rebound station.
 SECOND_ATTACK_FORWARD_M = 2.6          # Receiving slot ahead of the ball
 SECOND_ATTACK_LATERAL_M = 2.2          # Receiving slot to the open side
+# A receiver hidden behind an opponent is not a passing option, so a screened
+# lane costs it the slot.
+RECEIVE_LANE_CLEAR_M = 0.5             # Opponent this close to the lane screens it
+RECEIVE_SCREEN_PENALTY = 10.0          # Score penalty when the lane is screened
 
-# Goalkeeper: sit on the goal line and track the ball across the mouth.
+# Goalkeeper: sit on the goal line, on the goal-centre-to-ball line.
 GUARD_LINE_OFFSET_M = 0.35             # How far off the goal line to stand
-GUARD_TRACK_GAIN = 0.8                 # Fraction of the ball's y to mirror
 GUARD_POST_MARGIN_M = 0.15             # Stay this far inside each post
+GUARD_NEAR_BALL_M = 1.2                # Below this ball depth, mirror its y directly
 
 
 # ======================================================================
@@ -141,6 +153,15 @@ SHOT_AIM_CANDIDATES = 7                 # Sample points across the goal mouth
 SHOT_AIM_POST_MARGIN_M = 0.35           # Keep the aim off the posts (m)
 SHOT_AIM_OFFSET_PENALTY = 0.5           # Cost per metre of lateral deviation
 SHOT_OPEN_GOAL_CLEARANCE_M = 20.0       # Clearance assumed when no opponent is seen
+
+# Passing. A pass replaces the shot only when the shooting lane is genuinely
+# blocked and the lane to the receiver is clean: in 3v3 a loose pass is an
+# immediate counter-attack, so the guard rails matter more than the upside.
+PASS_SHOT_LANE_BLOCK_M = 0.6           # Opponent this close to the shot lane blocks it
+PASS_LANE_BLOCK_M = 0.45               # Receiver lane must be this clear
+PASS_MIN_ADVANCE_M = 1.0               # Receiver must be this much further forward
+PASS_LOCK_S = 0.7                      # Hold the pass decision this long (s)
+PASS_POWER = 1.8                       # Kick power for a pass (well short of a shot)
 
 # ======================================================================
 # Obstacle geometry

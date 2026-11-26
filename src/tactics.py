@@ -58,34 +58,22 @@ def _openness(context: Context, x: float, y: float) -> float:
     return SHOT_OPEN_GOAL_CLEARANCE_M if best == math.inf else best
 
 
-def _free_side(
-    context: Context, x: float, y: float, forward_m: float, lateral_m: float,
-) -> float:
-    """Return +1 or -1 for the more open side of a point ``forward_m`` ahead."""
-    up = _openness(context, x + forward_m, y + lateral_m)
-    down = _openness(context, x + forward_m, y - lateral_m)
-    return 1.0 if up >= down else -1.0
-
-
 def kickoff_push_target(context: Context) -> tuple[float, float]:
-    """Pick where the kick-off taker nudges the ball before playing on.
+    """Pick where the kick-off taker puts the ball: to its own left.
 
-    A straight shot from the centre mark cannot score, so the first touch only
-    has to move the ball clear of the spot and off the goal-mouth line. Aiming
-    to the open side also takes the ball away from the opponent most likely to
-    intercept.
+    A shot from the centre mark cannot count, so the first touch is a pass.
+    The taker faces the opponent goal, which puts its left hand on +y, and the
+    second attacker waits on that side: passing to a fixed side is what makes
+    the pair rehearsed, while picking the emptier side frame to frame means
+    neither player knows where the ball is going.
     """
     ball = context.ball
     if ball is None:
         return kickoff_point(context)
-    side = _free_side(
-        context, ball.x, ball.y,
-        KICKOFF_PUSH_FORWARD_M, KICKOFF_PUSH_LATERAL_M,
-    )
     return clamp_inside_field(
         context,
         ball.x + KICKOFF_PUSH_FORWARD_M,
-        ball.y + side * KICKOFF_PUSH_LATERAL_M,
+        ball.y + KICKOFF_PUSH_LATERAL_M,
         margin=RESTART_FIELD_MARGIN_M,
     )
 
@@ -142,40 +130,169 @@ def choose_shot_target(context: Context) -> tuple[float, float]:
     return (goal_x, best_y)
 
 
-def guard_target(context: Context) -> tuple[float, float]:
-    """Return the goalkeeper position: on the goal line, tracking the ball.
+def _lane_blocked(
+    context: Context,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    radius: float,
+) -> bool:
+    """Whether an opponent stands within ``radius`` of the start-to-end segment.
 
-    Standing on the line inside the goal mouth beats sitting at the goal-area
-    centre, because it covers a shot from any angle and stays legal.
+    This is the pass/shot lane test: a body on the line between the ball and
+    the target is what turns a good idea into a turnover.
+    """
+    ax, ay = start
+    bx, by = end
+    vx, vy = bx - ax, by - ay
+    length2 = vx * vx + vy * vy
+    for robot in context.opponents.values():
+        pose = robot.pose
+        if pose is None:
+            continue
+        if length2 < 1e-9:
+            t = 0.0
+        else:
+            t = clamp(((pose.x - ax) * vx + (pose.y - ay) * vy) / length2, 0.0, 1.0)
+        px, py = ax + vx * t, ay + vy * t
+        if math.hypot(pose.x - px, pose.y - py) <= radius:
+            return True
+    return False
+
+
+def choose_pass_target(
+    context: Context, receiver_pos: tuple[float, float] | None,
+) -> tuple[float, float] | None:
+    """Return the receiver when a pass beats shooting, or None to shoot.
+
+    Passing is only worth it when all three hold: the straight shot lane is
+    blocked, the lane to the receiver is clean, and the receiver is further
+    forward than the ball. Otherwise the shot stays the better option and a
+    pass would hand possession to the nearest defender.
+    """
+    ball = context.ball
+    if ball is None or receiver_pos is None:
+        return None
+
+    field = context.field
+    ball_pos = (ball.x, ball.y)
+    goal = (field.length / 2.0, 0.0)
+
+    if not _lane_blocked(context, ball_pos, goal, PASS_SHOT_LANE_BLOCK_M):
+        return None
+    if _lane_blocked(context, ball_pos, receiver_pos, PASS_LANE_BLOCK_M):
+        return None
+    if receiver_pos[0] <= ball.x + PASS_MIN_ADVANCE_M:
+        return None
+    return receiver_pos
+
+
+def guard_target(context: Context) -> tuple[float, float]:
+    """Return the goalkeeper position, on the goal-centre-to-ball line.
+
+    Mirroring the ball's own y puts the keeper at the near post whenever the
+    ball is wide, while the shot travels toward the goal centre — so the ball
+    passes a keeper that is standing in the right place for the wrong line and
+    arrives too late. Placing the keeper where the goal-centre-to-ball line
+    crosses the keeper's line keeps the body on the shot's actual path.
+
+    When the ball is almost on the goal line the intersection is ill-defined,
+    so the keeper simply mirrors it and covers the short side.
     """
     field = context.field
-    goal_x = -field.length / 2.0 + GUARD_LINE_OFFSET_M
+    goal_line = -field.length / 2.0
+    goal_x = goal_line + GUARD_LINE_OFFSET_M
     ball = context.ball
     if ball is None:
         return (goal_x, 0.0)
+
     limit = max(field.goal_width / 2.0 - GUARD_POST_MARGIN_M, 0.0)
-    return (goal_x, clamp(ball.y * GUARD_TRACK_GAIN, -limit, limit))
+    depth = ball.x - goal_line
+    if depth <= GUARD_NEAR_BALL_M:
+        y = ball.y
+    else:
+        y = ball.y * GUARD_LINE_OFFSET_M / depth
+    return (goal_x, clamp(y, -limit, limit))
 
 
 def second_attacker_target(context: Context) -> tuple[float, float]:
     """Return the receiving slot for the second attacker.
 
-    The slot sits ahead of the ball on the open side, so it is a short passing
-    option and a rebound station at once. Picking the side away from the
-    nearest opponent keeps the lane to it clear, and the offset from the
-    ball's own line keeps this robot out of the ball carrier's path.
+    A slot hidden behind an opponent is not a passing option: the ball carrier
+    cannot reach it, so the robot standing there is doing nothing useful.
+    Candidates ahead of the ball on both flanks and straight down the middle
+    are scored by the space around them, and a slot with an opponent in the
+    lane from the ball is penalised out of contention.
     """
     ball = context.ball
     if ball is None:
         return (0.0, 0.0)
-    side = _free_side(
-        context, ball.x, ball.y,
-        SECOND_ATTACK_FORWARD_M, SECOND_ATTACK_LATERAL_M,
-    )
-    return clamp_inside_field(
+
+    ball_pos = (ball.x, ball.y)
+    best = clamp_inside_field(
         context,
         ball.x + SECOND_ATTACK_FORWARD_M,
-        ball.y + side * SECOND_ATTACK_LATERAL_M,
+        ball.y + SECOND_ATTACK_LATERAL_M,
+        margin=RESTART_FIELD_MARGIN_M,
+    )
+    best_score = -math.inf
+    for offset in (SECOND_ATTACK_LATERAL_M, -SECOND_ATTACK_LATERAL_M, 0.0):
+        spot = clamp_inside_field(
+            context,
+            ball.x + SECOND_ATTACK_FORWARD_M,
+            ball.y + offset,
+            margin=RESTART_FIELD_MARGIN_M,
+        )
+        score = _openness(context, spot[0], spot[1])
+        if _lane_blocked(context, ball_pos, spot, RECEIVE_LANE_CLEAR_M):
+            score -= RECEIVE_SCREEN_PENALTY
+        if score > best_score:
+            best, best_score = spot, score
+    return best
+
+
+def score_difference(context: Context) -> int:
+    """Return our score minus the opponent's, or 0 when the score is unknown."""
+    game = context.game
+    if game is None:
+        return 0
+    ours = game.get_team_state(context.team_id)
+    if ours is None:
+        return 0
+    theirs = 0
+    for team in game.teams:
+        if team.team_number != context.team_id:
+            theirs = team.score
+            break
+    return ours.score - theirs
+
+
+def defender_target(context: Context) -> tuple[float, float]:
+    """Return the blocking position in front of our goal.
+
+    Standing on the line from the goal centre to the ball cuts the shooting
+    angle, which is the job the goalkeeper cannot do alone. The standoff keeps
+    a real gap from the ball so the defender never collides with it, and caps
+    the distance from the goal line so a shot from midfield does not pull the
+    defender out of position.
+    """
+    field = context.field
+    gx = -field.length / 2.0
+    ball = context.ball
+    if ball is None:
+        return (gx + DEFENDER_STANDOFF_M, 0.0)
+
+    dx, dy = ball.x - gx, ball.y
+    distance = math.hypot(dx, dy)
+    if distance < 1e-6:
+        return (gx + DEFENDER_STANDOFF_M, 0.0)
+
+    ux, uy = dx / distance, dy / distance
+    standoff = min(distance - DEFENDER_BALL_GAP_M, DEFENDER_STANDOFF_M)
+    standoff = max(standoff, 0.0)
+    return clamp_inside_field(
+        context,
+        gx + ux * standoff,
+        uy * standoff,
         margin=RESTART_FIELD_MARGIN_M,
     )
 
@@ -235,11 +352,12 @@ def assign_normal_roles(
 ) -> dict[int, str]:
     """Return the role name for each player id during normal play.
 
-    The nearest player attacks, the next one joins the attack once there are
-    three players, and the remaining one guards. Forcing the ball carrier to
-    beat a single defender is the framework's baseline; a second attacker turns
-    two of the three robots into a threat, while the guard keeps the goal
-    covered.
+    The nearest player attacks and the remaining player nearest our goal
+    guards. When three robots are available the third one either joins the
+    attack or drops in front of the goal, depending on the match situation:
+    with the ball in our half, or with a lead to protect, only one robot
+    pushes up so the goal is defended by two bodies instead of one. Leaving a
+    single goalkeeper is how a lead turns into a shoot-out.
 
     ``locked_attacker`` keeps the current ball carrier in the role until
     another player is clearly closer, so distance sorting cannot swap roles
@@ -272,10 +390,15 @@ def assign_normal_roles(
     ):
         attacker = locked_attacker
 
+    # Defending the lead, or defending our own half, costs one attacker.
+    defending = (
+        ball.x < 0.0 or score_difference(context) >= DEFEND_LEAD_MARGIN
+    )
+
     roles = {attacker: "attack"}
     rest = [player_id for player_id in ids if player_id != attacker]
 
-    if len(rest) >= 2:
+    if not defending and len(rest) >= 2:
         helper = min(rest, key=ball_distance)
         roles[helper] = "attack2"
         rest = [player_id for player_id in rest if player_id != helper]
@@ -286,5 +409,5 @@ def assign_normal_roles(
         rest = [player_id for player_id in rest if player_id != guard]
 
     for player_id in rest:
-        roles[player_id] = "support"
+        roles[player_id] = "defend"
     return roles

@@ -19,8 +19,11 @@ from src.framework.types import (
     Pose2D,
     RobotState,
     SetPlay,
+    TeamState,
 )
 from src.param import (
+    DEFENDER_BALL_GAP_M,
+    DEFENDER_STANDOFF_M,
     GUARD_LINE_OFFSET_M,
     GUARD_POST_MARGIN_M,
     KICKOFF_CLEAR_M,
@@ -42,14 +45,23 @@ def make_context(
     kicking_team=KICKING_TEAM_NONE,
     set_play=SetPlay.NONE,
     state=GameState.PLAYING,
+    our_score=0,
+    their_score=0,
 ):
+    opponent_team_id = 2 if team_id == 1 else 1
     return Context(
         now=0.0,
         dt=1.0 / 30.0,
         team_id=team_id,
         field=FIELD,
         game=GameControlState(
-            state=state, kicking_team=kicking_team, set_play=set_play,
+            state=state,
+            kicking_team=kicking_team,
+            set_play=set_play,
+            teams=(
+                TeamState(team_number=team_id, score=our_score),
+                TeamState(team_number=opponent_team_id, score=their_score),
+            ),
         ),
         ball=None if ball is None else BallState(x=ball[0], y=ball[1]),
         teammates={},
@@ -72,13 +84,15 @@ class KickoffPushTargetTest(unittest.TestCase):
         self.assertLessEqual(abs(target[0]), HALF_L)
         self.assertLessEqual(abs(target[1]), HALF_W)
 
-    def test_push_avoids_the_side_with_the_nearest_opponent(self):
-        target = tactics.kickoff_push_target(make_context(opponents=[(2.2, 1.6)]))
-        self.assertLess(target[1], 0.0)
+    def test_push_always_goes_to_the_takers_left(self):
+        # Fixed side, not the emptier one: the pair has to rehearse the pass.
+        for opponents in ([], [(2.2, 1.6)], [(2.2, -1.6)], [(1.5, 2.0), (1.5, -2.0)]):
+            target = tactics.kickoff_push_target(make_context(opponents=opponents))
+            self.assertGreater(target[1], 0.0)
 
-    def test_push_mirrors_when_the_other_side_is_crowded(self):
-        target = tactics.kickoff_push_target(make_context(opponents=[(2.2, -1.6)]))
-        self.assertGreater(target[1], 0.0)
+    def test_push_leans_sideways_rather_than_straight_upfield(self):
+        target = tactics.kickoff_push_target(make_context())
+        self.assertGreater(target[1], target[0])
 
     def test_push_without_a_ball_is_the_kickoff_point(self):
         self.assertEqual(
@@ -179,6 +193,30 @@ class GuardTargetTest(unittest.TestCase):
         target = tactics.guard_target(make_context(ball=None))
         self.assertAlmostEqual(target[1], 0.0)
 
+    def test_keeper_covers_the_shot_line_not_the_ball_y(self):
+        # Ball wide on the flank: the shot travels toward the goal centre, so
+        # the keeper must sit near the middle, not at the ball's own y.
+        target = tactics.guard_target(make_context(ball=(0.0, 4.0)))
+        self.assertLess(abs(target[1]), 0.5)
+
+    def test_keeper_closes_the_angle_further_out(self):
+        near = tactics.guard_target(make_context(ball=(-2.0, 3.0)))
+        far = tactics.guard_target(make_context(ball=(4.0, 3.0)))
+        self.assertGreater(abs(near[1]), abs(far[1]))
+
+    def test_keeper_mirrors_the_ball_once_it_is_on_the_line(self):
+        target = tactics.guard_target(make_context(ball=(-6.9, 1.0)))
+        self.assertAlmostEqual(target[1], 1.0)
+
+    def test_keeper_stays_on_the_shot_line_for_any_ball_position(self):
+        for ball in [(0.0, 2.0), (-2.0, 3.0), (4.0, -2.0), (2.0, 1.0)]:
+            target = tactics.guard_target(make_context(ball=ball))
+            shot_angle = math.atan2(ball[1], ball[0] + HALF_L)
+            keeper_angle = math.atan2(
+                target[1], target[0] + HALF_L,
+            )
+            self.assertAlmostEqual(keeper_angle, shot_angle, places=6)
+
 
 class SecondAttackerTargetTest(unittest.TestCase):
     def test_slot_is_ahead_of_the_ball_and_inside_the_field(self):
@@ -191,6 +229,25 @@ class SecondAttackerTargetTest(unittest.TestCase):
     def test_slot_takes_the_side_away_from_the_nearest_opponent(self):
         context = make_context(ball=(0.0, 0.0), opponents=[(1.5, 2.0)])
         self.assertLess(tactics.second_attacker_target(context)[1], 0.0)
+
+    def test_slot_moves_off_a_screened_lane(self):
+        # The opponent sits exactly on the ball -> upper-slot lane, so that
+        # slot is useless even though the opponent is not that close.
+        context = make_context(ball=(0.0, 0.0), opponents=[(1.3, 1.1)])
+        self.assertLess(tactics.second_attacker_target(context)[1], 0.0)
+
+    def test_slot_is_not_screened_from_the_ball(self):
+        context = make_context(ball=(0.0, 0.0), opponents=[(1.3, 1.1), (1.3, -1.1), (1.3, 0.0)])
+        target = tactics.second_attacker_target(context)
+        # Every lane is covered here, so the slot must still be a legal spot.
+        self.assertLessEqual(abs(target[0]), HALF_L)
+        self.assertLessEqual(abs(target[1]), HALF_W)
+
+    def test_slot_stays_inside_the_field_from_the_corner(self):
+        for ball in [(6.4, 0.0), (6.4, 4.4), (6.4, -4.4)]:
+            target = tactics.second_attacker_target(make_context(ball=ball))
+            self.assertLessEqual(abs(target[0]), HALF_L)
+            self.assertLessEqual(abs(target[1]), HALF_W)
 
 
 class ReadySlotsTest(unittest.TestCase):
@@ -282,6 +339,143 @@ class AssignNormalRolesTest(unittest.TestCase):
             make_context(ball=None), [(1, (1.0, 0.0)), (2, (2.0, 0.0))],
         )
         self.assertEqual(set(roles.values()), {"guard"})
+
+
+class ScoreDifferenceTest(unittest.TestCase):
+    def test_equal_score_is_zero(self):
+        self.assertEqual(tactics.score_difference(make_context()), 0)
+
+    def test_lead_is_positive(self):
+        context = make_context(our_score=3, their_score=0)
+        self.assertEqual(tactics.score_difference(context), 3)
+
+    def test_deficit_is_negative(self):
+        context = make_context(our_score=1, their_score=2)
+        self.assertEqual(tactics.score_difference(context), -1)
+
+    def test_away_team_reads_its_own_score(self):
+        context = make_context(team_id=2, our_score=0, their_score=2)
+        self.assertEqual(tactics.score_difference(context), -2)
+
+    def test_missing_game_state_is_zero(self):
+        context = Context(now=0.0, dt=0.0, team_id=1, field=FIELD, game=None)
+        self.assertEqual(tactics.score_difference(context), 0)
+
+
+class DefenderTargetTest(unittest.TestCase):
+    def test_defender_stands_in_front_of_our_goal(self):
+        target = tactics.defender_target(make_context(ball=(0.0, 0.0)))
+        self.assertGreater(target[0], -HALF_L)
+        self.assertLessEqual(target[0], -HALF_L + DEFENDER_STANDOFF_M + 1e-9)
+
+    def test_defender_stays_on_the_goal_to_ball_line(self):
+        for ball in [(0.0, 2.0), (0.0, -2.0), (3.0, 3.0), (2.0, -1.5)]:
+            target = tactics.defender_target(make_context(ball=ball))
+            expected = math.atan2(ball[1], ball[0] + HALF_L)
+            actual = math.atan2(target[1], target[0] + HALF_L)
+            self.assertAlmostEqual(actual, expected, places=6)
+
+    def test_defender_never_ends_up_behind_the_goal_line(self):
+        for ball in [(-6.0, 0.0), (-6.9, 0.5), (-5.5, -1.0)]:
+            target = tactics.defender_target(make_context(ball=ball))
+            self.assertGreaterEqual(target[0], -HALF_L - 1e-9)
+
+    def test_defender_keeps_a_gap_from_a_distant_ball(self):
+        context = make_context(ball=(0.0, 0.0))
+        target = tactics.defender_target(context)
+        self.assertGreaterEqual(
+            math.hypot(target[0], target[1]), DEFENDER_BALL_GAP_M - 1e-9,
+        )
+
+    def test_defender_never_leaves_the_field(self):
+        for ball in [(0.0, 4.4), (0.0, -4.4), (-6.5, 4.4), (5.0, 4.4)]:
+            target = tactics.defender_target(make_context(ball=ball))
+            self.assertLessEqual(abs(target[0]), HALF_L)
+            self.assertLessEqual(abs(target[1]), HALF_W)
+
+    def test_missing_ball_stands_in_front_of_the_goal(self):
+        target = tactics.defender_target(make_context(ball=None))
+        self.assertAlmostEqual(target[1], 0.0)
+
+
+class DefensiveShapeTest(unittest.TestCase):
+    def test_ball_in_our_half_brings_a_second_body_back(self):
+        context = make_context(ball=(-3.0, 0.0))
+        roles = tactics.assign_normal_roles(
+            context, [(1, (-2.0, 0.0)), (2, (-5.0, 1.0)), (3, (-6.0, 0.0))],
+        )
+        self.assertEqual(sorted(roles.values()), ["attack", "defend", "guard"])
+
+    def test_ball_in_opponent_half_keeps_two_attackers(self):
+        context = make_context(ball=(3.0, 0.0))
+        roles = tactics.assign_normal_roles(
+            context, [(1, (2.0, 0.0)), (2, (4.0, 1.0)), (3, (-6.0, 0.0))],
+        )
+        self.assertEqual(sorted(roles.values()), ["attack", "attack2", "guard"])
+
+    def test_leading_pulls_a_body_back_in_the_opponent_half_too(self):
+        context = make_context(ball=(3.0, 0.0), our_score=2, their_score=0)
+        roles = tactics.assign_normal_roles(
+            context, [(1, (2.0, 0.0)), (2, (4.0, 1.0)), (3, (-6.0, 0.0))],
+        )
+        self.assertEqual(sorted(roles.values()), ["attack", "defend", "guard"])
+
+    def test_trailing_keeps_both_attackers(self):
+        context = make_context(ball=(3.0, 0.0), our_score=0, their_score=2)
+        roles = tactics.assign_normal_roles(
+            context, [(1, (2.0, 0.0)), (2, (4.0, 1.0)), (3, (-6.0, 0.0))],
+        )
+        self.assertIn("attack2", roles.values())
+
+    def test_two_players_never_field_a_defender(self):
+        context = make_context(ball=(-3.0, 0.0))
+        roles = tactics.assign_normal_roles(
+            context, [(1, (-2.0, 0.0)), (2, (-6.0, 0.0))],
+        )
+        self.assertEqual(sorted(roles.values()), ["attack", "guard"])
+
+    def test_defender_is_not_the_goalkeeper(self):
+        context = make_context(ball=(-3.0, 0.0))
+        roles = tactics.assign_normal_roles(
+            context, [(1, (-2.0, 0.0)), (2, (-5.0, 1.0)), (3, (-6.0, 0.0))],
+        )
+        self.assertNotEqual(roles[2], roles[3])
+
+
+class ChoosePassTargetTest(unittest.TestCase):
+    def test_no_pass_when_the_shot_lane_is_clear(self):
+        context = make_context(ball=(0.0, 0.0))
+        self.assertIsNone(tactics.choose_pass_target(context, (4.0, 2.5)))
+
+    def test_passes_when_the_shot_is_blocked_and_the_receiver_lane_is_clear(self):
+        context = make_context(ball=(0.0, 0.0), opponents=[(3.0, 0.0)])
+        self.assertEqual(
+            tactics.choose_pass_target(context, (4.0, 2.5)), (4.0, 2.5),
+        )
+
+    def test_no_pass_when_the_receiver_lane_is_blocked(self):
+        context = make_context(ball=(0.0, 0.0), opponents=[(3.0, 0.0), (2.0, 1.2)])
+        self.assertIsNone(tactics.choose_pass_target(context, (4.0, 2.5)))
+
+    def test_no_pass_to_a_receiver_level_with_the_ball(self):
+        context = make_context(ball=(0.0, 0.0), opponents=[(3.0, 0.0)])
+        self.assertIsNone(tactics.choose_pass_target(context, (0.5, 2.5)))
+
+    def test_no_pass_without_a_receiver(self):
+        context = make_context(ball=(0.0, 0.0), opponents=[(3.0, 0.0)])
+        self.assertIsNone(tactics.choose_pass_target(context, None))
+
+    def test_no_pass_without_a_ball(self):
+        context = make_context(ball=None, opponents=[(3.0, 0.0)])
+        self.assertIsNone(tactics.choose_pass_target(context, (4.0, 2.5)))
+
+    def test_opponent_behind_the_ball_does_not_block_the_shot_lane(self):
+        context = make_context(ball=(0.0, 0.0), opponents=[(-2.0, 0.0)])
+        self.assertIsNone(tactics.choose_pass_target(context, (4.0, 2.5)))
+
+    def test_opponent_beyond_the_goal_does_not_block_the_shot_lane(self):
+        context = make_context(ball=(0.0, 0.0), opponents=[(9.0, 0.0)])
+        self.assertIsNone(tactics.choose_pass_target(context, (4.0, 2.5)))
 
 
 if __name__ == "__main__":

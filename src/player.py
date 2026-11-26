@@ -24,7 +24,12 @@ from .framework.types import Context, Penalty, Pose2D
 from .framework import debugdraw
 
 from .param import *
-from .tactics import choose_shot_target, guard_target, second_attacker_target
+from .tactics import (
+    choose_shot_target,
+    defender_target,
+    guard_target,
+    second_attacker_target,
+)
 from .utils.geom import (
     angle_to,
     clamp,
@@ -632,6 +637,31 @@ class Player:
                 avoid_robots=avoid,
             )
 
+    def pass_to(self, receiver_pos: tuple[float, float]) -> None:
+        """Chase the ball and kick it toward a teammate.
+
+        ``attack`` always kicks through ``plan_kick``, which aims at the goal
+        mouth, so a pass needs its own entry point: the direction comes from
+        the receiver and the power is deliberately short of a shot.
+        """
+        ctx = self.context
+        pose = self.pose
+        ball = ctx.ball if ctx is not None else None
+        if ctx is None or ball is None or pose is None:
+            self.stop()
+            return
+
+        d = dist(pose.x, pose.y, ball.x, ball.y)
+        self._kicking = d <= (KICK_EXIT_M if self._kicking else KICK_ENTER_M)
+        if self._kicking:
+            direction = angle_to(ball.x, ball.y, receiver_pos[0], receiver_pos[1])
+            self.kick(direction, PASS_POWER)
+        else:
+            self.release_kick()
+            self.walk_to(
+                _behind_ball(ball.x, ball.y, receiver_pos, CHASE_BEHIND_M)
+            )
+
     def second_attack(self) -> None:
         """Hold a passing option ahead of the ball instead of challenging.
 
@@ -658,12 +688,42 @@ class Player:
             avoid_robots=True,
         )
 
-    def guard(self) -> None:
-        """Guard our goal from the goal line, tracking the ball.
+    def defend(self) -> None:
+        """Hold the blocking position in front of our goal.
 
-        Standing at the goal-area centre leaves both corners open and lets a
-        shot from an angle beat the keeper. The goal line inside the mouth
-        covers the whole width, and the lateral position follows the ball.
+        The goalkeeper can only cover the mouth, so a second body on the
+        goal-to-ball line is what stops a counter-attack from becoming a clear
+        shot. This player never challenges for the ball: the attacker does
+        that, and two robots converging on the same ball would leave the goal
+        empty.
+        """
+        ctx = self.context
+        pose = self.pose
+        if ctx is None or pose is None:
+            self.action = "defend:stop"
+            self.stop()
+            return
+
+        ball = ctx.ball
+        target = defender_target(ctx)
+        face = 0.0
+        if ball is not None:
+            face = angle_to(pose.x, pose.y, ball.x, ball.y)
+        self.action = "defend:cover"
+        self.release_kick()
+        self.walk_to(target, face=face, avoid_ball=True, avoid_robots=True)
+
+    def guard(self) -> None:
+        """Guard our goal from the goal line, on the shot's line.
+
+        Standing at the goal-area centre leaves both corners open, and tracking
+        the ball's own y puts the keeper at the wrong post whenever the ball is
+        wide. The target sits where the goal-centre-to-ball line crosses the
+        keeper's line, so the shot comes straight at the body.
+
+        No robot avoidance here: a keeper that detours around a team-mate
+        arrives after the shot, and the goal mouth is not a place to take the
+        long way round.
         """
         ctx = self.context
         pose = self.pose
@@ -686,7 +746,7 @@ class Player:
         debugdraw.point(
             home[0], home[1], rgb=(0.0, 0.6, 1.0), scale=0.2, ns="guard_home",
         )
-        self.walk_to(home, face=face, avoid_ball=True, avoid_robots=True)
+        self.walk_to(home, face=face, avoid_ball=True, avoid_robots=False)
 
     def support(self) -> None:
         """Support on the ball-to-own-goal line at ``SUPPORT_DIST_M``.
