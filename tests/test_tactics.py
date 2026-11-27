@@ -627,6 +627,17 @@ class ReceivingTargetTest(unittest.TestCase):
             (0.0, 0.0),
         )
 
+    def test_touchline_duel_sends_second_attacker_to_open_weak_side(self):
+        # Mirrors the sideline duel where opponents crowd the +y half:
+        # second attacker behind the ball must push forward into the open
+        # centre / -y space instead of stalling on minor backward bounces.
+        context = make_context(
+            ball=(2.8, 3.7), opponents=[(3.5, 3.9), (4.2, 1.4), (5.8, 1.4)],
+        )
+        target = tactics.receiving_target(context, (0.0, 3.0), (-0.8, -0.2))
+        self.assertGreater(target[0], 4.0)
+        self.assertLessEqual(target[1], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -214,37 +214,47 @@ def guard_target(context: Context) -> tuple[float, float]:
     return (goal_x, clamp(y, -limit, limit))
 
 
-def second_attacker_target(context: Context) -> tuple[float, float]:
+def second_attacker_target(
+    context: Context,
+    prev_target: tuple[float, float] | None = None,
+) -> tuple[float, float]:
     """Return the receiving slot for the second attacker.
 
-    A slot hidden behind an opponent is not a passing option: the ball carrier
-    cannot reach it, so the robot standing there is doing nothing useful.
-    Candidates ahead of the ball on both flanks and straight down the middle
-    are scored by the space around them, and a slot with an opponent in the
-    lane from the ball is penalised out of contention.
+    Evaluates flanks relative to the ball plus central and weak-side lanes so
+    when the ball is pinned on one touchline the second attacker runs into the
+    open middle/far side instead of crowding the touchline. Optional
+    ``prev_target`` adds hysteresis so noisy opponent movement cannot flip the
+    target every frame and leave the robot turning in place.
     """
     ball = context.ball
     if ball is None:
         return (0.0, 0.0)
 
     ball_pos = (ball.x, ball.y)
-    best = clamp_inside_field(
-        context,
-        ball.x + SECOND_ATTACK_FORWARD_M,
+    tx = ball.x + SECOND_ATTACK_FORWARD_M
+    weak_y = -SECOND_ATTACK_LATERAL_M if ball.y >= 0.0 else SECOND_ATTACK_LATERAL_M
+    candidate_ys = (
         ball.y + SECOND_ATTACK_LATERAL_M,
-        margin=RESTART_FIELD_MARGIN_M,
+        ball.y - SECOND_ATTACK_LATERAL_M,
+        ball.y,
+        0.0,
+        weak_y,
+    )
+
+    best = clamp_inside_field(
+        context, tx, ball.y + SECOND_ATTACK_LATERAL_M, margin=RESTART_FIELD_MARGIN_M,
     )
     best_score = -math.inf
-    for offset in (SECOND_ATTACK_LATERAL_M, -SECOND_ATTACK_LATERAL_M, 0.0):
+    for cy in candidate_ys:
         spot = clamp_inside_field(
-            context,
-            ball.x + SECOND_ATTACK_FORWARD_M,
-            ball.y + offset,
-            margin=RESTART_FIELD_MARGIN_M,
+            context, tx, cy, margin=RESTART_FIELD_MARGIN_M,
         )
         score = _openness(context, spot[0], spot[1])
         if _lane_blocked(context, ball_pos, spot, RECEIVE_LANE_CLEAR_M):
             score -= RECEIVE_SCREEN_PENALTY
+        if prev_target is not None:
+            d_prev = dist(spot[0], spot[1], prev_target[0], prev_target[1])
+            score += SECOND_ATTACK_HYSTERESIS * max(0.0, 1.0 - d_prev / 2.5)
         if score > best_score:
             best, best_score = spot, score
     return best
@@ -290,17 +300,14 @@ def receiving_target(
     context: Context,
     pose: tuple[float, float],
     ball_velocity: tuple[float, float] = (0.0, 0.0),
+    prev_target: tuple[float, float] | None = None,
 ) -> tuple[float, float]:
     """Return where the receiver should run: the ball's future position.
 
-    Standing on a fixed slot and waiting means a rolling pass arrives late and
-    the receiver has to turn back for it. When the ball is actually travelling
-    toward this player, the target is projected ``RECEIVE_LEAD_S`` along its
-    velocity so the robot meets the ball instead of chasing it.
-
-    A stationary ball, or one moving away, keeps the normal receiving slot:
-    leading a ball that is not coming here would just pull the receiver upfield
-    after our own dribble.
+    Only leads a ball that is genuinely travelling toward an ahead/level
+    receiver; minor backward bounces during a midfield duel keep the steady
+    open receiving slot so the second attacker pushes upfield instead of
+    stalling on the halfway line.
     """
     ball = context.ball
     if ball is None:
@@ -309,11 +316,16 @@ def receiving_target(
     vx, vy = ball_velocity
     speed = math.hypot(vx, vy)
     if speed < RECEIVE_LEAD_MIN_SPEED:
-        return second_attacker_target(context)
+        return second_attacker_target(context, prev_target=prev_target)
 
-    toward = (pose[0] - ball.x) * vx + (pose[1] - ball.y) * vy
-    if toward <= 0.0:
-        return second_attacker_target(context)
+    dx, dy = pose[0] - ball.x, pose[1] - ball.y
+    d_recv = math.hypot(dx, dy)
+    if d_recv < 1e-6 or pose[0] < ball.x - 0.5:
+        return second_attacker_target(context, prev_target=prev_target)
+
+    cos_align = (dx * vx + dy * vy) / (speed * d_recv)
+    if cos_align < RECEIVE_LEAD_MIN_COS:
+        return second_attacker_target(context, prev_target=prev_target)
 
     return clamp_inside_field(
         context,

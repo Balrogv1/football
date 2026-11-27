@@ -134,6 +134,8 @@ class Player:
         self._support_last_pos: tuple[float, float] | None = None
         self._support_stationary_since: float | None = None
         self._support_last_update_at: float | None = None
+        # Cross-frame target memory for second_attack hysteresis.
+        self._second_attack_target: tuple[float, float] | None = None
 
     # ------------------------------------------------------------------
     # State access
@@ -686,7 +688,10 @@ class Player:
             return
 
         self.release_kick()
-        target = receiving_target(ctx, (pose.x, pose.y), ball_velocity)
+        target = receiving_target(
+            ctx, (pose.x, pose.y), ball_velocity, prev_target=self._second_attack_target,
+        )
+        self._second_attack_target = target
         self.walk_to(
             target,
             face=angle_to(pose.x, pose.y, ball.x, ball.y),

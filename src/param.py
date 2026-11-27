@@ -19,8 +19,8 @@ KICK_POWER_MIN = 1.0
 KICK_POWER_MAX = 10.0
 
 # Kick power during normal play.
-KICK_POWER_DEFAULT = 7.0
-KICK_POWER_BACKFIELD = 7.5
+KICK_POWER_DEFAULT = 6.0
+KICK_POWER_BACKFIELD = 6.2
 KICK_POWER_OUR_KICKOFF = 5.0
 
 
@@ -135,14 +135,17 @@ DEFENDER_INACTIVITY_NUDGE_M = 0.35     # Subtle lateral motion to avoid M-05 pen
 SECOND_ATTACK_FORWARD_M = 2.6          # Receiving slot ahead of the ball
 SECOND_ATTACK_LATERAL_M = 2.2          # Receiving slot to the open side
 # A receiver hidden behind an opponent is not a passing option, so a screened
-# lane costs it the slot.
+# lane costs it the slot. Hysteresis prevents frame-to-frame target flipping
+# that would make the receiver stop and turn in place.
 RECEIVE_LANE_CLEAR_M = 0.5             # Opponent this close to the lane screens it
 RECEIVE_SCREEN_PENALTY = 10.0          # Score penalty when the lane is screened
+SECOND_ATTACK_HYSTERESIS = 1.2         # Bonus near previous target to prevent stalls
 
 # Receiver lead. A pass in flight reaches the slot late if the receiver stands
 # still, so it runs to where the ball is going instead of where it is.
 RECEIVE_LEAD_S = 0.6                   # How far ahead to project a moving ball (s)
-RECEIVE_LEAD_MIN_SPEED = 0.6           # Below this the ball counts as stationary (m/s)
+RECEIVE_LEAD_MIN_SPEED = 1.0           # Ignore minor duel bounces below this speed (m/s)
+RECEIVE_LEAD_MIN_COS = 0.5             # Ball must travel mostly toward the receiver
 BALL_MAX_TRACKED_SPEED = 15.0          # Faster than this is a teleport, not a pass
 BALL_VELOCITY_SMOOTHING = 0.5          # 0 = freeze the estimate, 1 = no smoothing
 
