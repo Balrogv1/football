@@ -452,6 +452,13 @@ class DefensiveShapeTest(unittest.TestCase):
         )
         self.assertEqual(sorted(roles.values()), ["attack", "attack2", "guard"])
 
+    def test_one_goal_lead_still_keeps_two_attackers_in_opponent_half(self):
+        context = make_context(ball=(3.0, 0.0), our_score=1, their_score=0)
+        roles = tactics.assign_normal_roles(
+            context, [(1, (2.0, 0.0)), (2, (4.0, 1.0)), (3, (-6.0, 0.0))],
+        )
+        self.assertEqual(sorted(roles.values()), ["attack", "attack2", "guard"])
+
     def test_leading_pulls_a_body_back_in_the_opponent_half_too(self):
         context = make_context(ball=(3.0, 0.0), our_score=2, their_score=0)
         roles = tactics.assign_normal_roles(

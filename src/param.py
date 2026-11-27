@@ -19,8 +19,8 @@ KICK_POWER_MIN = 1.0
 KICK_POWER_MAX = 10.0
 
 # Kick power during normal play.
-KICK_POWER_DEFAULT = 5.0
-KICK_POWER_BACKFIELD = 5.0
+KICK_POWER_DEFAULT = 7.0
+KICK_POWER_BACKFIELD = 7.5
 KICK_POWER_OUR_KICKOFF = 5.0
 
 
@@ -121,7 +121,7 @@ RESTART_FIELD_MARGIN_M = 0.6           # Keep restart targets inside the lines
 # Team shape. The ball carrier alone cannot hold a lead: with the ball in our
 # half, or with a lead to protect, one player pushes up and the third player
 # drops in front of the goal instead of waiting for a pass.
-DEFEND_LEAD_MARGIN = 1                 # Lead from which only one player pushes up
+DEFEND_LEAD_MARGIN = 2                 # Lead from which only one player pushes up (e.g. 2:0)
 DEFENDER_DEPTH_MAX_M = 4.5             # Furthest upfield the covering defender holds
 DEFENDER_BALL_GAP_M = 1.8              # Stay > DEFENDER_CLEAR_M so defend doesn't fight attack
 DEFENDER_CLEAR_M = 1.4                 # Ball this close to the defender gets cleared
