@@ -144,8 +144,13 @@ class SoccerSimAgent(SoccerAgentMixin, AgentBase):
 
         # Leaving our own kick-off means the ball has just been played into the
         # opponent half. Open a short window in which the second player chases
-        # that loose ball instead of dropping into the defensive shape.
-        if store.prev_phase == Phase.OUR_KICKOFF and phase == Phase.NORMAL:
+        # that loose ball instead of dropping into the defensive shape (skipped
+        # when stalling a lead, where we transition straight to defensive shape).
+        if (
+            store.prev_phase == Phase.OUR_KICKOFF
+            and phase == Phase.NORMAL
+            and not tactics.should_stall_restart(context)
+        ):
             store.kickoff_chase_until = context.now + KICKOFF_CHASE_S
 
         # Draw per-frame visualizations.
@@ -376,6 +381,63 @@ def _pass_target(
     return target
 
 
+def _act_stall_restart(
+    context: Context,
+    players: list[Player],
+    *,
+    label: str,
+    own_half_only: bool = False,
+) -> None:
+    """Hold > 3 m from the ball without kicking until official ball_free.
+
+    Used when leading by >= ``STALL_RESTART_LEAD_MARGIN`` on our own kick-offs
+    and set plays (corner, goal kick, throw-in, free kick, penalty) to legally
+    burn the 10 s / 45 s restart timer while avoiding M-05 and P-02 penalties.
+    Once the referee releases ball_free, ``get_phase`` transitions to
+    ``Phase.NORMAL`` automatically and live play resumes.
+    """
+    if not players:
+        return
+
+    ball = context.ball
+    bx, by = (ball.x, ball.y) if ball is not None else (0.0, 0.0)
+    gx, gy = own_goal(context)
+
+    guard: Player | None = None
+    rest = list(players)
+    if len(rest) >= 2:
+        candidate = min(rest, key=lambda p: _player_dist_to_position(p, (gx, gy)))
+        home = tactics.guard_target(context)
+        # Keep the keeper on the goal line only if it is safely > 3 m from the
+        # restart ball (e.g. a goal kick near our mouth moves the keeper to a
+        # safe > 3.25 m slot so a 45 s stall cannot draw an M-05 penalty).
+        if dist(home[0], home[1], bx, by) >= STALL_SAFE_DIST_M:
+            guard = candidate
+            guard.action = "guard"
+            guard.guard(allow_clear=False)
+            rest = [p for p in rest if p is not guard]
+
+    slots = tactics.stall_hold_slots(
+        context, len(rest), own_half_only=own_half_only,
+    )
+    if len(rest) == 2 and len(slots) == 2:
+        direct = (
+            _player_dist_to_position(rest[0], slots[0])
+            + _player_dist_to_position(rest[1], slots[1])
+        )
+        swapped = (
+            _player_dist_to_position(rest[0], slots[1])
+            + _player_dist_to_position(rest[1], slots[0])
+        )
+        if swapped < direct:
+            rest = [rest[1], rest[0]]
+
+    for p, target in zip(rest, slots):
+        p.action = label
+        face = angle_to(target[0], target[1], bx, by)
+        p.walk_to(target, face=face, avoid_ball=True, avoid_robots=True)
+
+
 def _act_our_kickoff(context: Context, players: list[Player], store) -> None:
     """Pass the ball to the taker's left, let the receiver shoot, then play on.
 
@@ -414,6 +476,12 @@ def _act_our_kickoff(context: Context, players: list[Player], store) -> None:
         if _kickoff_receiver_attacks(context, players, store):
             return
         _act_normal(context, players, store)
+        return
+
+    if tactics.should_stall_restart(context):
+        _act_stall_restart(
+            context, players, label="kickoff:stall", own_half_only=True,
+        )
         return
 
     attacker_id = store.kickoff_taker
@@ -564,6 +632,12 @@ def _act_our_set_play(context: Context, players: list[Player], store) -> None:
     ):
         # The ball is clear of the spot, so a goal from here counts.
         _act_normal(context, players, store)
+        return
+
+    if tactics.should_stall_restart(context):
+        _act_stall_restart(
+            context, players, label="set:stall", own_half_only=False,
+        )
         return
 
     taker = _select_closest_attacker(context, players)

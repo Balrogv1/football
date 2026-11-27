@@ -351,6 +351,97 @@ def score_difference(context: Context) -> int:
     return ours.score - theirs
 
 
+def should_stall_restart(context: Context) -> bool:
+    """Whether we should run down our own restart clock instead of kicking.
+
+    When leading by at least ``STALL_RESTART_LEAD_MARGIN`` (e.g. 2:0), waiting
+    for the official restart countdown (10 s on kick-off, 45 s on set plays)
+    to expire and release ball_free burns clock legally without risking a
+    turnover. All robots must wait > 3.0 m from the ball so M-05 never fires.
+    """
+    return score_difference(context) >= STALL_RESTART_LEAD_MARGIN
+
+
+def stall_hold_slots(
+    context: Context,
+    count: int,
+    *,
+    own_half_only: bool = False,
+) -> list[tuple[float, float]]:
+    """Return ``count`` goal-side holding spots strictly > 3.0 m from the ball.
+
+    Used while stalling our own set plays or kick-offs when leading >= 2 goals:
+    * Keeps every robot away from the ball so nobody touches it early.
+    * Guarantees ``dist(spot, ball) >= STALL_SAFE_DIST_M`` (> 3.0 m) so waiting
+      up to 45 s cannot trigger an M-05 no-activity penalty.
+    * Biases spots toward our own goal (goal-side defense) and, when
+      ``own_half_only`` is True (kick-offs), keeps every spot strictly in our
+      own half and outside the centre circle (rules P-02 / P-03).
+    """
+    if count <= 0:
+        return []
+    field = context.field
+    half_l = field.length / 2.0
+    half_w = field.width / 2.0
+    margin = RESTART_FIELD_MARGIN_M
+    ball = context.ball
+    bx, by = (ball.x, ball.y) if ball is not None else (0.0, 0.0)
+    gx, gy = own_goal(context)
+
+    if own_half_only:
+        # Staggered defensive slots in our own half, > 3.25 m from (0, 0) and
+        # well outside the 1.5 m centre circle.
+        preset = [
+            clamp_inside_field(context, -2.6, 2.2, margin=margin),
+            clamp_inside_field(context, -3.8, -1.9, margin=margin),
+            clamp_inside_field(context, -half_l + field.goal_area_length, 0.0, margin=margin),
+        ]
+        return preset[:count]
+
+    # Sample angles around the ball at STALL_HOLD_DIST_M, preferring angles
+    # pointing toward our own goal so our players screen the goal while stalling.
+    goal_angle = math.atan2(gy - by, gx - bx)
+    candidates: list[tuple[float, float, float]] = []
+    steps = 24
+    for i in range(steps):
+        ang = goal_angle + (2.0 * math.pi * i) / steps
+        cx = bx + math.cos(ang) * STALL_HOLD_DIST_M
+        cy = by + math.sin(ang) * STALL_HOLD_DIST_M
+        if not (-half_l + margin <= cx <= half_l - margin):
+            continue
+        if not (-half_w + margin <= cy <= half_w - margin):
+            continue
+        if dist(cx, cy, bx, by) < STALL_SAFE_DIST_M:
+            continue
+        # Lower score = closer to our goal (better defensive cover).
+        goal_dist = dist(cx, cy, gx, gy)
+        candidates.append((goal_dist, cx, cy))
+
+    candidates.sort(key=lambda item: item[0])
+
+    # Greedily pick well-separated spots (>= 1.8 m apart) so teammates don't crowd.
+    chosen: list[tuple[float, float]] = []
+    for _, cx, cy in candidates:
+        if all(dist(cx, cy, px, py) >= 1.8 for px, py in chosen):
+            chosen.append((cx, cy))
+            if len(chosen) >= count:
+                break
+
+    # Fallback if tight spacing filtered too many points.
+    for _, cx, cy in candidates:
+        if len(chosen) >= count:
+            break
+        if (cx, cy) not in chosen:
+            chosen.append((cx, cy))
+
+    while len(chosen) < count:
+        # Ultimate fallback: opposite side of midfield well away from the ball.
+        fx = -2.0 if bx >= 0.0 else 2.0
+        fy = -2.0 if by >= 0.0 else 2.0
+        chosen.append(clamp_inside_field(context, fx, fy, margin=margin))
+    return chosen
+
+
 def defender_target(context: Context) -> tuple[float, float]:
     """Return the blocking position between the ball and our goal.
 

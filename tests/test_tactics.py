@@ -639,5 +639,44 @@ class ReceivingTargetTest(unittest.TestCase):
         self.assertLessEqual(target[1], 0.0)
 
 
+class StallRestartTest(unittest.TestCase):
+    def test_stall_triggers_only_when_leading_by_two_or_more(self):
+        self.assertFalse(tactics.should_stall_restart(make_context(our_score=0, their_score=0)))
+        self.assertFalse(tactics.should_stall_restart(make_context(our_score=1, their_score=0)))
+        self.assertFalse(tactics.should_stall_restart(make_context(our_score=2, their_score=1)))
+        self.assertFalse(tactics.should_stall_restart(make_context(our_score=0, their_score=2)))
+        self.assertTrue(tactics.should_stall_restart(make_context(our_score=2, their_score=0)))
+        self.assertTrue(tactics.should_stall_restart(make_context(our_score=3, their_score=1)))
+        self.assertTrue(tactics.should_stall_restart(make_context(our_score=5, their_score=0)))
+
+    def test_set_play_stall_slots_stay_above_3m_for_m05_across_all_spots(self):
+        # Test corners, goal kicks, penalty spot, touchlines, and centre.
+        spots = [
+            (6.9, 4.4),    # opponent corner
+            (-6.0, 2.0),   # our goal kick
+            (-6.0, -2.0),  # our goal kick
+            (4.9, 0.0),    # opponent penalty spot
+            (0.0, 4.4),    # touchline throw-in
+            (0.0, 0.0),    # centre
+        ]
+        for bx, by in spots:
+            ctx = make_context(ball=(bx, by), our_score=2, their_score=0)
+            slots = tactics.stall_hold_slots(ctx, 3, own_half_only=False)
+            self.assertEqual(len(slots), 3)
+            for sx, sy in slots:
+                self.assertGreater(math.hypot(sx - bx, sy - by), 3.0)
+                self.assertLess(abs(sx), HALF_L)
+                self.assertLess(abs(sy), HALF_W)
+
+    def test_kickoff_stall_slots_stay_in_own_half_outside_circle_and_3m(self):
+        ctx = make_context(ball=(0.0, 0.0), our_score=2, their_score=0)
+        slots = tactics.stall_hold_slots(ctx, 2, own_half_only=True)
+        self.assertEqual(len(slots), 2)
+        for sx, sy in slots:
+            self.assertLess(sx, 0.0)
+            self.assertGreater(math.hypot(sx, sy), 3.0)
+            self.assertGreater(math.hypot(sx, sy), FIELD.circle_radius)
+
+
 if __name__ == "__main__":
     unittest.main()

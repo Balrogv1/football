@@ -122,6 +122,9 @@ RESTART_FIELD_MARGIN_M = 0.6           # Keep restart targets inside the lines
 # half, or with a lead to protect, one player pushes up and the third player
 # drops in front of the goal instead of waiting for a pass.
 DEFEND_LEAD_MARGIN = 2                 # Lead from which only one player pushes up (e.g. 2:0)
+STALL_RESTART_LEAD_MARGIN = 2          # Lead from which our restarts stall until ball_free
+STALL_HOLD_DIST_M = 3.4                # Hold strictly > 3.0 m from ball (M-05 safe)
+STALL_SAFE_DIST_M = 3.25               # Min safe distance from ball during a long stall
 DEFENDER_DEPTH_MAX_M = 4.5             # Furthest upfield the covering defender holds
 DEFENDER_BALL_GAP_M = 1.8              # Stay > DEFENDER_CLEAR_M so defend doesn't fight attack
 DEFENDER_CLEAR_M = 1.4                 # Ball this close to the defender gets cleared
