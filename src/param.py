@@ -88,10 +88,13 @@ OPP_SET_PLAY_FIELD_MARGIN_M = 0.3
 # starts to apply.
 OPP_SET_PLAY_KEEPER_MIN_M = 3.2
 
-# Opponent kick-off: waiting players stay outside 3 m of the ball so a long
-# kick-off countdown cannot book them for no activity.
-OPP_KICKOFF_HOLD_BACK_M = 3.4
-OPP_KICKOFF_HOLD_LATERAL_M = 1.2
+# Opponent kick-off: staggered-x defensive triangle (all slots > 3 m from the
+# centre ball so a long countdown cannot book any robot for M-05 no activity,
+# with distinct x/y coordinates so the two field players never crowd each other).
+OPP_KICKOFF_FRONT_BACK_M = 2.6         # Front presser x behind ball (-2.6)
+OPP_KICKOFF_FRONT_LATERAL_M = 1.9      # Front presser y offset (+1.9, dist 3.22 m)
+OPP_KICKOFF_DEEP_BACK_M = 4.0          # Deep cover/relay x behind ball (-4.0)
+OPP_KICKOFF_DEEP_LATERAL_M = 1.9       # Deep cover/relay y offset (-1.9, dist 4.43 m)
 
 # Restarts (kick-off and set plays). A goal from the restart spot only counts
 # after a second robot touches the ball or a touch beyond 0.5 m, so the taker

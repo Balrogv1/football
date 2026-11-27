@@ -482,11 +482,10 @@ def _kickoff_receiver_attacks(
 
 
 def _act_opp_kickoff(context: Context, players: list[Player]) -> None:
-    """Guard with one player while the others wait outside the centre circle.
+    """Guard with one player while the others hold a staggered-x triangle.
 
-    The waiting spots sit more than 3 m from the ball, so a kick-off countdown
-    cannot book a stationary robot for no activity. Sorting by current y keeps
-    the two blockers on their own flank instead of crossing paths.
+    The waiting spots sit more than 3 m from the ball (M-05 safe) with distinct
+    x and y values so the front presser and deep relay never crowd each other.
     """
     if not players:
         return
@@ -498,11 +497,33 @@ def _act_opp_kickoff(context: Context, players: list[Player]) -> None:
     ball = context.ball
     bx, by = (ball.x, ball.y) if ball is not None else (0.0, 0.0)
     rest = [p for p in players if p is not guard]
-    rest.sort(key=lambda p: p.pose.y if p.pose is not None else 0.0, reverse=True)
     slots = [
-        (bx - OPP_KICKOFF_HOLD_BACK_M, by + OPP_KICKOFF_HOLD_LATERAL_M),
-        (bx - OPP_KICKOFF_HOLD_BACK_M, by - OPP_KICKOFF_HOLD_LATERAL_M),
+        clamp_inside_field(
+            context,
+            bx - OPP_KICKOFF_FRONT_BACK_M,
+            by + OPP_KICKOFF_FRONT_LATERAL_M,
+            margin=RESTART_FIELD_MARGIN_M,
+        ),
+        clamp_inside_field(
+            context,
+            bx - OPP_KICKOFF_DEEP_BACK_M,
+            by - OPP_KICKOFF_DEEP_LATERAL_M,
+            margin=RESTART_FIELD_MARGIN_M,
+        ),
     ]
+    if len(rest) == 2:
+        # Match players to front/deep slots by minimum total distance so they
+        # keep their READY spots instead of crossing paths.
+        direct = (
+            _player_dist_to_position(rest[0], slots[0])
+            + _player_dist_to_position(rest[1], slots[1])
+        )
+        swapped = (
+            _player_dist_to_position(rest[0], slots[1])
+            + _player_dist_to_position(rest[1], slots[0])
+        )
+        if swapped < direct:
+            rest = [rest[1], rest[0]]
     for p, target in zip(rest, slots):
         p.action = "opp_kickoff:hold"
         p.walk_to(target, face=angle_to(target[0], target[1], bx, by), avoid_ball=True, avoid_robots=True)

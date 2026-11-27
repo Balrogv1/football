@@ -404,14 +404,27 @@ class DefenderTargetTest(unittest.TestCase):
         from src.param import DEFENDER_CLEAR_M
         self.assertGreater(DEFENDER_BALL_GAP_M, DEFENDER_CLEAR_M)
 
-    def test_opp_kickoff_ready_slots_form_triangle_not_single_line(self):
+    def test_opp_kickoff_ready_slots_form_staggered_x_triangle(self):
         slots = tactics.ready_slots(make_context(kicking_team=2), [1, 2, 3])
-        ys = [y for _, y in slots.values()]
+        pts = list(slots.values())
+        xs = [x for x, _ in pts]
+        ys = [y for _, y in pts]
+        # All three players have distinct x depths (>= 1.0 m apart) and cover
+        # both flanks so they form a staggered triangle without crowding.
+        self.assertEqual(len(set(xs)), 3)
+        xs_sorted = sorted(xs)
+        self.assertGreaterEqual(xs_sorted[1] - xs_sorted[0], 1.0)
+        self.assertGreaterEqual(xs_sorted[2] - xs_sorted[1], 1.0)
         self.assertTrue(any(y > 0.5 for y in ys))
         self.assertTrue(any(y < -0.5 for y in ys))
-        for x, y in slots.values():
-            self.assertLess(x, 0.0)
-            self.assertGreater(math.hypot(x, y), 3.0)
+        for i in range(len(pts)):
+            self.assertLess(pts[i][0], 0.0)
+            self.assertGreater(math.hypot(pts[i][0], pts[i][1]), 3.0)
+            for j in range(i + 1, len(pts)):
+                self.assertGreater(
+                    math.hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1]),
+                    2.5,
+                )
 
     def test_defender_never_leaves_the_field(self):
         for ball in [(0.0, 4.4), (0.0, -4.4), (-6.5, 4.4), (5.0, 4.4)]:
