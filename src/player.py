@@ -34,6 +34,7 @@ from .tactics import (
 from .utils.geom import (
     angle_to,
     clamp,
+    clamp_inside_field,
     dist,
     normalize_angle,
     opponent_goal,
@@ -728,11 +729,18 @@ class Player:
         face = 0.0
         if ball is not None:
             face = angle_to(pose.x, pose.y, ball.x, ball.y)
+            # Rule M-05 protection: if ball stalls within 3 m of the defender
+            # without entering clear range, keep subtle purposeful lateral motion.
+            if dist(pose.x, pose.y, ball.x, ball.y) <= DEFENDER_INACTIVITY_RADIUS_M:
+                nudge_y = math.sin(ctx.now * 1.5) * DEFENDER_INACTIVITY_NUDGE_M
+                target = clamp_inside_field(
+                    ctx, target[0], target[1] + nudge_y, margin=RESTART_FIELD_MARGIN_M,
+                )
         self.action = "defend:cover"
         self.release_kick()
         self.walk_to(target, face=face, avoid_ball=False, avoid_robots=True)
 
-    def guard(self) -> None:
+    def guard(self, *, allow_clear: bool = False) -> None:
         """Guard our goal from the goal line, on the shot's line.
 
         Standing at the goal-area centre leaves both corners open, and tracking
@@ -740,9 +748,8 @@ class Player:
         wide. The target sits where the goal-centre-to-ball line crosses the
         keeper's line, so the shot comes straight at the body.
 
-        No robot avoidance here: a keeper that detours around a team-mate
-        arrives after the shot, and the goal mouth is not a place to take the
-        long way round.
+        ``allow_clear`` is only enabled in live play so the keeper never kicks
+        a dead ball during opponent set plays or kick-offs (rule R-06).
         """
         ctx = self.context
         pose = self.pose
@@ -752,7 +759,7 @@ class Player:
             return
 
         ball = ctx.ball if ctx is not None else None
-        if ball is not None:
+        if allow_clear and ball is not None:
             if dist(pose.x, pose.y, ball.x, ball.y) <= DEFENDER_CLEAR_M:
                 # The ball has reached the keeper, so there is no goal left to
                 # guard: clear it rather than watch it roll in.

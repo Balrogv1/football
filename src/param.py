@@ -120,9 +120,11 @@ RESTART_FIELD_MARGIN_M = 0.6           # Keep restart targets inside the lines
 # drops in front of the goal instead of waiting for a pass.
 DEFEND_LEAD_MARGIN = 1                 # Lead from which only one player pushes up
 DEFENDER_DEPTH_MAX_M = 4.5             # Furthest upfield the covering defender holds
-DEFENDER_BALL_GAP_M = 1.0              # Never stand closer than this to the ball
+DEFENDER_BALL_GAP_M = 1.8              # Stay > DEFENDER_CLEAR_M so defend doesn't fight attack
 DEFENDER_CLEAR_M = 1.4                 # Ball this close to the defender gets cleared
 DEFENDER_CLEAR_POWER = 4.0             # Clearance power (away from our goal)
+DEFENDER_INACTIVITY_RADIUS_M = 3.15    # Rule M-05 safety radius (threshold 3.0 m)
+DEFENDER_INACTIVITY_NUDGE_M = 0.35     # Subtle lateral motion to avoid M-05 penalty
 
 # Second attacker: never challenges for the ball, so the two robots cannot
 # crowd each other. It holds a receiving position ahead of the ball, offset to

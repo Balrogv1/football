@@ -398,10 +398,13 @@ def ready_slots(
             (-0.5, field.circle_radius + 2.0),
         ]
     else:
+        # Spread into a defensive triangle instead of stacking on y = 0:
+        # two midfield blockers match the OPP_KICKOFF hold spots (> 3 m from
+        # centre, outside circle) and the keeper covers the goal area.
         slots = [
-            circle_slot,
+            (-OPP_KICKOFF_HOLD_BACK_M, OPP_KICKOFF_HOLD_LATERAL_M),
             goal_area_slot,
-            (-field.length / 2.0 + field.penalty_area_length, 0.0),
+            (-OPP_KICKOFF_HOLD_BACK_M, -OPP_KICKOFF_HOLD_LATERAL_M),
         ]
 
     assigned: dict[int, tuple[float, float]] = {}

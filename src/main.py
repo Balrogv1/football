@@ -217,6 +217,7 @@ class SoccerSimAgent(SoccerAgentMixin, AgentBase):
 
 def _clear_normal_sticky(store) -> None:
     store.normal_attacker = None
+    store.pass_lock_until = 0.0
 
 
 def _player_dist_to_position(p: Player, target: tuple[float, float]) -> float:
@@ -298,16 +299,21 @@ def _act_normal(context: Context, players: list[Player], store) -> None:
     candidates = [
         (p.id, (p.pose.x, p.pose.y)) for p in players if p.pose is not None
     ]
+    prev_attacker = getattr(store, "normal_attacker", None)
     roles = tactics.assign_normal_roles(
         context,
         candidates,
-        getattr(store, "normal_attacker", None),
+        prev_attacker,
         chase=context.now < getattr(store, "kickoff_chase_until", 0.0),
     )
     store.normal_attacker = next(
         (player_id for player_id, role in roles.items() if role == "attack"),
         None,
     )
+    # Clear pass lock when possession changes so a receiver never inherits the
+    # previous carrier's lock and immediately passes backwards.
+    if store.normal_attacker != prev_attacker:
+        store.pass_lock_until = 0.0
 
     by_id = {p.id: p for p in players}
     positions = dict(candidates)
@@ -339,7 +345,7 @@ def _act_normal(context: Context, players: list[Player], store) -> None:
             player.second_attack(_ball_velocity(store))
         elif role == "guard":
             player.action = "guard"
-            player.guard()
+            player.guard(allow_clear=True)
         elif role == "defend":
             player.action = "defend"
             player.defend()
@@ -471,7 +477,7 @@ def _kickoff_receiver_attacks(
             p.second_attack(_ball_velocity(store))
         else:
             p.action = "guard"
-            p.guard()
+            p.guard(allow_clear=True)
     return True
 
 
@@ -479,7 +485,8 @@ def _act_opp_kickoff(context: Context, players: list[Player]) -> None:
     """Guard with one player while the others wait outside the centre circle.
 
     The waiting spots sit more than 3 m from the ball, so a kick-off countdown
-    cannot book a stationary robot for no activity.
+    cannot book a stationary robot for no activity. Sorting by current y keeps
+    the two blockers on their own flank instead of crossing paths.
     """
     if not players:
         return
@@ -491,13 +498,14 @@ def _act_opp_kickoff(context: Context, players: list[Player]) -> None:
     ball = context.ball
     bx, by = (ball.x, ball.y) if ball is not None else (0.0, 0.0)
     rest = [p for p in players if p is not guard]
+    rest.sort(key=lambda p: p.pose.y if p.pose is not None else 0.0, reverse=True)
     slots = [
         (bx - OPP_KICKOFF_HOLD_BACK_M, by + OPP_KICKOFF_HOLD_LATERAL_M),
         (bx - OPP_KICKOFF_HOLD_BACK_M, by - OPP_KICKOFF_HOLD_LATERAL_M),
     ]
     for p, target in zip(rest, slots):
         p.action = "opp_kickoff:hold"
-        p.walk_to(target, avoid_ball=True, avoid_robots=True)
+        p.walk_to(target, face=angle_to(target[0], target[1], bx, by), avoid_ball=True, avoid_robots=True)
 
 
 def _act_our_set_play(context: Context, players: list[Player], store) -> None:

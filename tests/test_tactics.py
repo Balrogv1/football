@@ -400,6 +400,19 @@ class DefenderTargetTest(unittest.TestCase):
         gap = math.hypot(target[0] - ball[0], target[1] - ball[1])
         self.assertLessEqual(gap, DEFENDER_BALL_GAP_M + 0.05)
 
+    def test_defender_gap_exceeds_clear_radius_to_avoid_crowding_attacker(self):
+        from src.param import DEFENDER_CLEAR_M
+        self.assertGreater(DEFENDER_BALL_GAP_M, DEFENDER_CLEAR_M)
+
+    def test_opp_kickoff_ready_slots_form_triangle_not_single_line(self):
+        slots = tactics.ready_slots(make_context(kicking_team=2), [1, 2, 3])
+        ys = [y for _, y in slots.values()]
+        self.assertTrue(any(y > 0.5 for y in ys))
+        self.assertTrue(any(y < -0.5 for y in ys))
+        for x, y in slots.values():
+            self.assertLess(x, 0.0)
+            self.assertGreater(math.hypot(x, y), 3.0)
+
     def test_defender_never_leaves_the_field(self):
         for ball in [(0.0, 4.4), (0.0, -4.4), (-6.5, 4.4), (5.0, 4.4)]:
             target = tactics.defender_target(make_context(ball=ball))
